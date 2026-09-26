@@ -1,13 +1,89 @@
+cc_library(
+    name = "operation_descriptors",
+    hdrs = ["operation_descriptors.h"],
+    deps = ["@llvm-project//mlir:IR"],
+)
+
+cc_library(
+    name = "stablehlo_importer",
+    srcs = ["stablehlo_importer.cc"],
+    hdrs = ["stablehlo_importer.h"],
+    deps = [
+        ":operation_descriptors",
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "stablehlo_exporter",
+    srcs = ["stablehlo_exporter.cc"],
+    hdrs = ["stablehlo_exporter.h"],
+    deps = [
+        ":operation_descriptors",
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "shardy_runner",
+    srcs = ["shardy_runner.cc"],
+    hdrs = ["boundary_sharding.h", "shardy_runner.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:Pass",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/transforms/common:propagation_options",
+        "@shardy//shardy/dialect/sdy/transforms/propagation:passes",
+        "@shardy//shardy/dialect/sdy/transforms/export:passes",
+    ],
+)
+
+cc_binary(
+    name = "run_shardy",
+    srcs = ["run_shardy.cc"],
+    data = [
+        "testdata/add_mul.mlir",
+        "testdata/dot_general.mlir",
+    ],
+    deps = [
+        ":operation_descriptors",
+        ":shardy_runner",
+        ":stablehlo_exporter",
+        ":stablehlo_importer",
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
 cc_binary(
     name = "parse_stablehlo",
     srcs = ["parse_stablehlo.cc"],
     deps = [
+        ":operation_descriptors",
         "@llvm-project//llvm:Support",
 
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:FuncDialect",
 
         "@stablehlo//:register",
         "@stablehlo//:stablehlo_ops",
+        "//research/joint_shard/egg-c:eggc",
+        ":stablehlo_importer",
+        ":stablehlo_exporter",
     ],
 )
