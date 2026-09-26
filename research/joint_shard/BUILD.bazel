@@ -1,0 +1,13 @@
+cc_binary(
+    name = "parse_stablehlo",
+    srcs = ["parse_stablehlo.cc"],
+    deps = [
+        "@llvm-project//llvm:Support",
+
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
