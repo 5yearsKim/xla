@@ -1,0 +1,3 @@
+[submodule "research/joint_shard/egg-c"]
+	path = research/joint_shard/egg-c
+	url = https://github.com/5yearsKim/egg-c
