@@ -1,0 +1,10 @@
+filegroup(
+    name = "samples",
+    srcs = [
+        "add_mul.mlir",
+        "dot_contracting.mlir",
+        "dot_gather.mlir",
+        "dot_general.mlir",
+    ],
+    visibility = ["//research/joint_shard:__subpackages__"],
+)

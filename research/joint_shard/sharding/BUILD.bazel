@@ -1,0 +1,20 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "shardy_runner",
+    srcs = ["shardy_runner.cc"],
+    hdrs = ["shardy_runner.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/transforms/common:propagation_options",
+        "@shardy//shardy/dialect/sdy/transforms/export:passes",
+        "@shardy//shardy/dialect/sdy/transforms/propagation:passes",
+    ],
+)

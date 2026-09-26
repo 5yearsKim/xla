@@ -1,0 +1,20 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "rewrite_regions",
+    srcs = ["rewrite_regions.cc"],
+    hdrs = ["rewrite_regions.h"],
+    deps = [
+        "//research/joint_shard/bridge:operation_descriptors",
+        "//research/joint_shard/bridge:stablehlo_exporter",
+        "//research/joint_shard/bridge:stablehlo_importer",
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)

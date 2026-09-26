@@ -1,4 +1,4 @@
-#include "research/joint_shard/stablehlo_exporter.h"
+#include "research/joint_shard/bridge/stablehlo_exporter.h"
 
 #include <stdexcept>
 #include <string>
@@ -45,12 +45,12 @@ mlir::Value StableHloExporter::exportNode(const eggc::RecExpr& expr,
     try {
       argument_index = std::stoul(index_text, &parsed);
     } catch (const std::exception&) {
-      throw std::invalid_argument("invalid function argument expression");
+      throw std::invalid_argument("invalid region input expression");
     }
-    if (parsed != index_text.size() || argument_index >= arguments_.size()) {
-      throw std::out_of_range("function argument index is out of range");
+    if (parsed != index_text.size() || argument_index >= inputs_.size()) {
+      throw std::out_of_range("region input index is out of range");
     }
-    values_[node_index] = arguments_[argument_index];
+    values_[node_index] = inputs_[argument_index];
     return values_[node_index];
   }
 

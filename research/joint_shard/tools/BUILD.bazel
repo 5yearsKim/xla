@@ -1,0 +1,29 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
+cc_binary(
+    name = "run_shardy",
+    srcs = ["run_shardy.cc"],
+    data = ["//research/joint_shard/testdata:samples"],
+    deps = [
+        "//research/joint_shard/sharding:shardy_runner",
+        "//research/joint_shard/transforms:rewrite_regions",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+    ],
+)
+
+cc_binary(
+    name = "parse_stablehlo",
+    srcs = ["parse_stablehlo.cc"],
+    deps = [
+        "//research/joint_shard/transforms:rewrite_regions",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+    ],
+)

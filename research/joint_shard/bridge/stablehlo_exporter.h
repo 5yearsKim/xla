@@ -1,5 +1,5 @@
-#ifndef RESEARCH_JOINT_SHARD_STABLEHLO_EXPORTER_H_
-#define RESEARCH_JOINT_SHARD_STABLEHLO_EXPORTER_H_
+#ifndef RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_EXPORTER_H_
+#define RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_EXPORTER_H_
 
 #include <cstddef>
 #include <utility>
@@ -9,16 +9,16 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "eggc/expr.hpp"
-#include "research/joint_shard/operation_descriptors.h"
+#include "research/joint_shard/bridge/operation_descriptors.h"
 
 class StableHloExporter {
  public:
   StableHloExporter(mlir::OpBuilder& builder, mlir::Location loc,
-                    std::vector<mlir::Value> arguments,
+                    std::vector<mlir::Value> inputs,
                     OperationDescriptors* descriptors = nullptr)
       : builder_(builder),
         loc_(loc),
-        arguments_(std::move(arguments)),
+        inputs_(std::move(inputs)),
         descriptors_(descriptors) {}
 
   mlir::Value exportExpr(const eggc::RecExpr& expr, std::size_t node);
@@ -28,9 +28,9 @@ class StableHloExporter {
 
   mlir::OpBuilder& builder_;
   mlir::Location loc_;
-  std::vector<mlir::Value> arguments_;
+  std::vector<mlir::Value> inputs_;
   std::vector<mlir::Value> values_;
   OperationDescriptors* descriptors_;
 };
 
-#endif  // RESEARCH_JOINT_SHARD_STABLEHLO_EXPORTER_H_
+#endif  // RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_EXPORTER_H_

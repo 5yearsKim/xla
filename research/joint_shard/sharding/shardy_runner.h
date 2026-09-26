@@ -1,5 +1,5 @@
-#ifndef RESEARCH_JOINT_SHARD_SHARDY_RUNNER_H_
-#define RESEARCH_JOINT_SHARD_SHARDY_RUNNER_H_
+#ifndef RESEARCH_JOINT_SHARD_SHARDING_SHARDY_RUNNER_H_
+#define RESEARCH_JOINT_SHARD_SHARDING_SHARDY_RUNNER_H_
 
 #include <map>
 #include <string>
@@ -7,7 +7,6 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
-#include "research/joint_shard/boundary_sharding.h"
 
 enum class ShardyStage { Propagation, ExplicitReshards, Collectives };
 
@@ -22,20 +21,17 @@ struct ShardySnapshot {
   std::map<std::string, unsigned> communicationOps;
 };
 
-// Mutates a fresh, unsharded module. Use separate clones for separate cases.
+// Mutates an annotated module; existing meshes and shardings are authoritative.
 class ShardyRunner {
  public:
   mlir::LogicalResult run(mlir::ModuleOp module,
-                          const std::vector<BoundarySharding>& constraints,
                           const ShardyRunOptions& options = {});
   const std::vector<ShardySnapshot>& snapshots() const { return snapshots_; }
 
  private:
-  mlir::LogicalResult attachBoundaries(
-      mlir::ModuleOp module, const std::vector<BoundarySharding>& constraints);
   mlir::LogicalResult capture(mlir::ModuleOp module, const std::string& name,
                               const std::string& dumpDirectory);
   std::vector<ShardySnapshot> snapshots_;
 };
 
-#endif  // RESEARCH_JOINT_SHARD_SHARDY_RUNNER_H_
+#endif  // RESEARCH_JOINT_SHARD_SHARDING_SHARDY_RUNNER_H_

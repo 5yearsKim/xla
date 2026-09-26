@@ -1,0 +1,34 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "operation_descriptors",
+    hdrs = ["operation_descriptors.h"],
+    deps = ["@llvm-project//mlir:IR"],
+)
+
+cc_library(
+    name = "stablehlo_importer",
+    srcs = ["stablehlo_importer.cc"],
+    hdrs = ["stablehlo_importer.h"],
+    deps = [
+        "//research/joint_shard/egg-c:eggc",
+        ":operation_descriptors",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "stablehlo_exporter",
+    srcs = ["stablehlo_exporter.cc"],
+    hdrs = ["stablehlo_exporter.h"],
+    deps = [
+        "//research/joint_shard/egg-c:eggc",
+        ":operation_descriptors",
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)

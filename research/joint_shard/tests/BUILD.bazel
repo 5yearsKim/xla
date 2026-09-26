@@ -1,0 +1,25 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(
+    default_testonly = True,
+    default_visibility = ["//research/joint_shard:__pkg__"],
+)
+
+cc_test(
+    name = "fixed_sharding_test",
+    srcs = ["fixed_sharding_test.cc"],
+    linkstatic = True,
+    deps = [
+        "//research/joint_shard/sharding:shardy_runner",
+        "//research/joint_shard/transforms:rewrite_regions",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)

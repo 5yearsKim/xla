@@ -1,4 +1,4 @@
-#include "research/joint_shard/stablehlo_importer.h"
+#include "research/joint_shard/bridge/stablehlo_importer.h"
 
 #include <stdexcept>
 #include <string>
@@ -7,6 +7,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "stablehlo/dialect/StablehloOps.h"
+
+void StableHloImporter::bindValue(mlir::Value value, unsigned index) {
+  cache_[value] = graph_.add("arg" + std::to_string(index));
+}
 
 eggc::Id StableHloImporter::importValue(mlir::Value value) {
   auto cached = cache_.find(value);
@@ -19,6 +23,10 @@ eggc::Id StableHloImporter::importValue(mlir::Value value) {
   }
 
   mlir::Operation* op = value.getDefiningOp();
+  if (op->hasAttr("sdy.sharding")) {
+    throw std::runtime_error(
+        "annotated values must be bound as opaque region inputs");
+  }
   if (auto dot = llvm::dyn_cast<mlir::stablehlo::DotGeneralOp>(op)) {
     auto lhsType =
         llvm::dyn_cast<mlir::RankedTensorType>(dot.getLhs().getType());
