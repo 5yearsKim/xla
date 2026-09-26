@@ -1,4 +1,11 @@
 test_suite(
     name = "tests",
-    tests = ["//research/joint_shard/tests:fixed_sharding_test"],
+    tests = [
+        "//research/joint_shard/egg-c/tests:language_test",
+        "//research/joint_shard/egg-c/tests:concepts_test",
+        "//research/joint_shard/tests:fixed_sharding_test",
+        "//research/joint_shard/tests:tensorlang_test",
+        "//research/joint_shard/tests:semantic_rewrite_test",
+        "//research/joint_shard/tests:rewrite_pipeline_test",
+    ],
 )

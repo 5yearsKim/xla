@@ -43,3 +43,9 @@ build --config=warnings
 common:rbe_linux_cpu --features=layering_check
 
 try-import %workspace%/xla_configure.bazelrc
+
+# joint_shard requires C++20 and a standard library newer than the default GCC 8.
+# Opt in for this project's builds; dependencies retain their C++17 source flags
+# and use the same GCC 12 / glibc 2.35 sysroot for compatible compilation/linking.
+build:joint_shard --repo_env=SYSROOT_DIST=linux_glibc_2_35
+build:joint_shard --per_file_copt=research/joint_shard/.*@-std=c++20

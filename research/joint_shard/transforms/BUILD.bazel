@@ -7,7 +7,7 @@ cc_library(
     srcs = ["rewrite_regions.cc"],
     hdrs = ["rewrite_regions.h"],
     deps = [
-        "//research/joint_shard/bridge:operation_descriptors",
+        "//research/joint_shard/bridge/tensor_lang:tensorlang",
         "//research/joint_shard/bridge:stablehlo_exporter",
         "//research/joint_shard/bridge:stablehlo_importer",
         "//research/joint_shard/egg-c:eggc",

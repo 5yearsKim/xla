@@ -57,14 +57,14 @@ module {
   EXPECT_EQ(fixed.getRhs(), function.getArgument(2));
   auto before = fixed.getLhs().getDefiningOp<mlir::stablehlo::AddOp>();
   ASSERT_TRUE(before);
-  EXPECT_EQ(before.getLhs(), function.getArgument(2));
-  EXPECT_TRUE(before.getRhs().getDefiningOp<mlir::stablehlo::MulOp>());
+  EXPECT_EQ(before.getRhs(), function.getArgument(2));
+  EXPECT_TRUE(before.getLhs().getDefiningOp<mlir::stablehlo::MulOp>());
   auto ret = llvm::cast<mlir::func::ReturnOp>(
       function.getBody().front().getTerminator());
   auto after = ret.getOperand(0).getDefiningOp<mlir::stablehlo::AddOp>();
   ASSERT_TRUE(after);
-  EXPECT_EQ(after.getLhs(), function.getArgument(2));
-  auto multiply = after.getRhs().getDefiningOp<mlir::stablehlo::MulOp>();
+  EXPECT_EQ(after.getRhs(), function.getArgument(2));
+  auto multiply = after.getLhs().getDefiningOp<mlir::stablehlo::MulOp>();
   ASSERT_TRUE(multiply);
   EXPECT_EQ(multiply.getLhs(), fixed.getResult());
   EXPECT_EQ(function.getArgAttrDict(0), argAttrs);
@@ -130,9 +130,11 @@ module {
   ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module)));
   EXPECT_EQ(unused->getAttrDictionary(), attrs);
   EXPECT_TRUE(unused->use_empty());
+  // Transpose is supported now; obtain its reconstructed replacement.
+  module->walk([&](mlir::stablehlo::TransposeOp op) { transpose = op; });
   auto add = transpose.getOperand().getDefiningOp<mlir::stablehlo::AddOp>();
   ASSERT_TRUE(add);
-  EXPECT_TRUE(llvm::isa<mlir::BlockArgument>(add.getLhs()));
+  EXPECT_TRUE(llvm::isa<mlir::BlockArgument>(add.getRhs()));
 }
 
 TEST_F(FixedShardingTest, ReshardsConflictingLayoutsUsingExistingMesh) {

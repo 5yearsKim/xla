@@ -1,0 +1,34 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+genrule(
+    name = "embedded_rules",
+    srcs = ["tensor.rules"],
+    outs = ["tensor_rules.inc"],
+    cmd = "awk 'BEGIN {print \"R\\\"tensor_rules(\"} {print} END {print \")tensor_rules\\\"\"}' $(location tensor.rules) > $@",
+)
+
+cc_library(
+    name = "tensorlang",
+    srcs = [
+        "semantic_rewrite.cc",
+        "attribute_rewrites.cc",
+        "op_properties.cc",
+        "tensor_analysis.cc",
+        "tensor_rewrites.cc",
+        "tensorlang.cc",
+    ],
+    hdrs = [
+        ":embedded_rules",
+        "tensor_analysis.h",
+        "op_properties.h",
+        "tensor_rewrites.h",
+        "tensorlang.h",
+    ],
+    deps = [
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)

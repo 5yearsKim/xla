@@ -1,6 +1,7 @@
 #ifndef RESEARCH_JOINT_SHARD_SHARDING_SHARDY_RUNNER_H_
 #define RESEARCH_JOINT_SHARD_SHARDING_SHARDY_RUNNER_H_
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -15,10 +16,21 @@ struct ShardyRunOptions {
   std::string dumpDirectory;
 };
 
+struct ModuleCost {
+  // Logical tensor payload, a topology-independent proxy, not network bytes.
+  uint64_t communication_payload_bytes = 0;
+  uint64_t compute_work = 0;
+  unsigned unknown_costs = 0;
+};
+ModuleCost estimateModuleCost(mlir::ModuleOp module);
+// Conservative: an unknown estimate never displaces a measured baseline.
+bool betterModuleCost(const ModuleCost& candidate, const ModuleCost& baseline);
+
 struct ShardySnapshot {
   std::string name;
   std::string mlir;
   std::map<std::string, unsigned> communicationOps;
+  ModuleCost cost;
 };
 
 // Mutates an annotated module; existing meshes and shardings are authoritative.
