@@ -49,6 +49,7 @@ cc_binary(
     srcs = ["summarize_regions.cc"],
     data = ["//research/joint_shard/testdata:samples"],
     deps = [
+        "//research/joint_shard/export:selected_export",
         ":rewrite_cli_options",
         "//research/joint_shard/reporting:artifact_writer",
         "//research/joint_shard/reporting:reports",

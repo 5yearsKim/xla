@@ -11,6 +11,7 @@ test_suite(
         "//research/joint_shard/sharding:shardy_runner_test",
         "//research/joint_shard/tests:chain_optimization_test",
         "//research/joint_shard/tests:dag_optimization_test",
+        "//research/joint_shard/tests:selected_export_test",
         "//research/joint_shard/tests:fixed_sharding_test",
         "//research/joint_shard/tests:pair_composition_test",
         "//research/joint_shard/tests:region_optimizer_test",

@@ -1,0 +1,32 @@
+[project]
+name = "joint-shard-executor"
+version = "0.1.0"
+description = "Execute optimizer-exported StableHLO with prebuilt XLA/PJRT"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax==0.11.2",
+    "jaxlib==0.11.2",
+    "numpy>=2.0",
+]
+
+[tool.uv]
+# Use runtime wheels; never build XLA or other dependencies from source.
+no-build = true
+
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.7",
+]
+
+[tool.ruff]
+include = ["**/*.py"]
+
+[tool.ruff.lint]
+select = ["ANN", "I"]
+
+# too strict/noisy for projects
+ignore = [
+    "ANN401",  # Allow typing.Any
+]

@@ -49,9 +49,10 @@ Reproduce each row from the workspace root (replace 3 with 4 or 5):
 bazel build --config=joint_shard //research/joint_shard/tools:summarize_regions
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/chain_3.mlir \
-  --optimize-chain --numerical-policy=relaxed --dump-dir=/tmp/joint_chain \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
-cat /tmp/joint_chain/comparison.txt
+  --optimize-chain --numerical-policy=relaxed \
+  --output-dir=/tmp/joint_chain --dump-dir=/tmp/joint_chain_debug \
+  2> /tmp/selection_report.txt
+cat /tmp/joint_chain_debug/comparison.txt
 ```
 
 `selected.mlir` contains one verified `@main`; its exact boundary and recomputed

@@ -1,0 +1,22 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "selected_export",
+    srcs = ["selected_export.cc"],
+    hdrs = ["selected_export.h"],
+    # Match the C++17 XLA/Abseil dependency ABI (notably SourceLocation).
+    copts = ["-std=c++17"],
+    deps = [
+        "//xla/service/spmd/shardy/stablehlo_round_trip:stablehlo_export",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/transforms/export:passes",
+    ],
+)

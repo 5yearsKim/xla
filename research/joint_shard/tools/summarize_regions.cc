@@ -7,6 +7,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Parser/Parser.h"
 #include "cxxopts.hpp"
+#include "research/joint_shard/export/selected_export.h"
 #include "research/joint_shard/reporting/artifact_writer.h"
 #include "research/joint_shard/reporting/reports.h"
 #include "research/joint_shard/search/region_optimizer.h"
@@ -103,6 +104,8 @@ int main(int argc, char** argv) {
                                        cxxopts::value<std::string>())(
         "collective-latency-us", "Collective latency in microseconds",
         cxxopts::value<std::string>())(
+        "output-dir", "Write selected.mlir and xla_input.mlir here",
+        cxxopts::value<std::string>())(
         "dump-dir", "Write intermediate IR to this directory",
         cxxopts::value<std::string>());
     cli.parse_positional({"input"});
@@ -119,6 +122,7 @@ int main(int argc, char** argv) {
 
     RegionOptimizerOptions options;
     std::string dump_directory;
+    std::string output_directory;
     for (const cxxopts::KeyValue& argument : parsed.arguments()) {
       const std::string& name = argument.key();
       const std::string& value = argument.value();
@@ -173,6 +177,8 @@ int main(int argc, char** argv) {
         options.mesh_name = value;
       else if (name == "dump-dir")
         dump_directory = value;
+      else if (name == "output-dir")
+        output_directory = value;
       else if (name == "data-axis")
         options.layouts.data_axis = value;
       else if (name == "model-axis")
@@ -212,6 +218,14 @@ int main(int argc, char** argv) {
       else
         throw std::invalid_argument("unknown option: --" + name);
     }
+    if (options.optimize_chain || options.optimize_dag) {
+      if (output_directory.empty())
+        throw std::invalid_argument(
+            "--output-dir is required for --optimize-chain or --optimize-dag");
+    } else if (!output_directory.empty()) {
+      throw std::invalid_argument(
+          "--output-dir requires --optimize-chain or --optimize-dag");
+    }
     mlir::DialectRegistry registry;
     mlir::stablehlo::registerAllDialects(registry);
     mlir::sdy::registerAllDialects(registry);
@@ -221,11 +235,27 @@ int main(int argc, char** argv) {
     if (!module) return 1;
     ArtifactWriter artifacts(dump_directory);
     auto report = summarizeRegions(*module, options, artifacts.observer());
-    if (report.dag) {
-      llvm::outs() << report.dag->selected().lowered_mlir << '\n';
-      llvm::errs() << formatReport(report);
-    } else if (report.chain) {
-      llvm::outs() << report.chain->selected().lowered_mlir << '\n';
+    if ((options.optimize_chain || options.optimize_dag) && !report.chain &&
+        !report.dag)
+      throw std::runtime_error("selection produced no complete program");
+    if (report.dag || report.chain) {
+      const std::string& selected = report.dag
+                                        ? report.dag->selected().lowered_mlir
+                                        : report.chain->selected().lowered_mlir;
+      auto selected_module =
+          mlir::parseSourceString<mlir::ModuleOp>(selected, &context);
+      if (!selected_module)
+        throw std::runtime_error("failed to parse selected optimizer output");
+      auto exported = exportSelectedProgram(*selected_module);
+      if (!exported.ok())
+        throw std::runtime_error(exported.status().ToString());
+      std::string xla_input;
+      llvm::raw_string_ostream out(xla_input);
+      exported->module->print(out);
+      ArtifactWriter(output_directory)
+          .writeSelectedPrograms(selected, xla_input);
+      llvm::outs() << output_directory << "/selected.mlir\n"
+                   << output_directory << "/xla_input.mlir\n";
       llvm::errs() << formatReport(report);
     } else {
       llvm::outs() << formatReport(report);

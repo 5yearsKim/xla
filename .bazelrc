@@ -48,4 +48,6 @@ try-import %workspace%/xla_configure.bazelrc
 # Opt in for this project's builds; dependencies retain their C++17 source flags
 # and use the same GCC 12 / glibc 2.35 sysroot for compatible compilation/linking.
 build:joint_shard --repo_env=SYSROOT_DIST=linux_glibc_2_35
-build:joint_shard --per_file_copt=research/joint_shard/.*@-std=c++20
+# The XLA export bridge stays C++17 so Abseil's SourceLocation ABI matches the
+# C++17 dependency libraries; this bridge does not need the engine's C++20 APIs.
+build:joint_shard --per_file_copt=research/joint_shard/.*,-research/joint_shard/export[:/].*@-std=c++20

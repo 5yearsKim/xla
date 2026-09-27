@@ -58,9 +58,10 @@ Reproduce any fixture (replace `residual_block` with another table entry):
 bazel build --config=joint_shard //research/joint_shard/tools:summarize_regions
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/residual_block.mlir \
-  --optimize-dag --numerical-policy=relaxed --dump-dir=/tmp/joint_dag \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
-cat /tmp/joint_dag/comparison.txt
+  --optimize-dag --numerical-policy=relaxed \
+  --output-dir=/tmp/joint_dag --dump-dir=/tmp/joint_dag_debug \
+  2> /tmp/selection_report.txt
+cat /tmp/joint_dag_debug/comparison.txt
 ```
 
 Every command emits one verified `@main`. Selected boundaries, reconstructed

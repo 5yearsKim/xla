@@ -1,7 +1,7 @@
 # StableHLO, egg-c, and Shardy prototype
 
 The region optimizer architecture, policies and experiments are in
-[REGION_OPTIMIZER.md](REGION_OPTIMIZER.md).
+[REGION_OPTIMIZER.md](../misc/REGION_OPTIMIZER.md).
 
 The TensorLang implementation and extension contracts are in
 [TENSORLANG.md](TENSORLANG.md). The bridge uses structural nodes with typed
@@ -19,6 +19,7 @@ joint_shard/
   bridge/           # TensorLang nodes and StableHLO ↔ egg-c import/export
   transforms/       # region discovery, saturation and candidate extraction
   sharding/         # boundary layouts, Shardy evaluation and costs
+  export/           # selected Shardy path to XLA-ready StableHLO
   search/           # typed interfaces, region tables, pair composition and orchestration
   reporting/        # report formatting and artifact output
   tools/            # command-line executables and CLI parsing
@@ -34,7 +35,7 @@ New source files belong in their component package, with explicit `srcs`/`hdrs`.
 
 C++ APIs live in the `joint_shard` namespace. `summarizeRegions` returns
 structured results and accepts synchronous `OptimizationObserver` callbacks;
-search and Shardy execution do not write files. The tools connect an
+search and Shardy evaluation do not write files. The optimizer tools connect an
 `ArtifactWriter` when `--dump-dir` is requested and format results with
 `formatReport`. CLI parsing belongs to `tools/`, while library callers populate
 typed options directly.
@@ -49,7 +50,8 @@ This project uses C++20. Build with `--config=joint_shard`: the root `.bazelrc`
 scopes C++20 source flags to joint_shard and selects the hermetic GCC 12 / glibc
 2.35 sysroot, because XLA's default GCC 8 library lacks C++20 headers. Dependencies
 retain C++17 source flags and use the same selected sysroot. This configuration
-requires glibc 2.35 or newer to run; it does not change other XLA builds unless
+also keeps the `export/` bridge in C++17 to match Abseil's `SourceLocation` ABI.
+It requires glibc 2.35 or newer to run; it does not change other XLA builds unless
 selected. Engine CMake and standalone Bazel also require C++20. The engine checks
 external node and analysis APIs with `Language` and `AnalysisFor` concepts.
 
@@ -116,7 +118,7 @@ exact boundary layouts, retains the best candidate per boundary, and prunes
 states served more cheaply by another plan plus directed reshards. It prints
 region frontiers and preserves the source module. Add `--compose-regions=0,1`
 to search and emit verified combined modules for an adjacent pair; see the
-[composition guide](REGION_OPTIMIZER.md#compose-two-regions). Candidate count
+[composition guide](../misc/REGION_OPTIMIZER.md#compose-two-regions). Candidate count
 defaults to a cap of 32, with at most five distinct profile candidates in this milestone.
 
 Add `--optimize-chain` to automatically select a complete implementation of a
@@ -130,17 +132,19 @@ and one intermediate tensor between each pair of neighboring regions.
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/chain_3.mlir \
-  --optimize-chain --dump-dir=/tmp/joint_chain \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+  --optimize-chain --output-dir=/tmp/joint_chain \
+  2> /tmp/selection_report.txt
 ```
 
-Chain mode emits verified selected MLIR to stdout and the explanation to stderr.
-The dump directory also contains `selected.mlir`, `selected_plan.txt`, and a
-compact `comparison.txt` covering original-only DP, joint greedy, exact DP and
-dominance-resolved DP. `--chain-search=resolved` selects the latter; exact search
+Chain mode writes `selected.mlir` (the chosen StableHLO + Shardy path) and
+`xla_input.mlir` (XLA-ready StableHLO) to `--output-dir`; stdout lists their
+paths and stderr contains the explanation. Use `--dump-dir` separately for
+candidate snapshots, `selected_plan.txt`, and a compact `comparison.txt`
+covering original-only DP, joint greedy, exact DP and dominance-resolved DP.
+`--chain-search=resolved` selects the latter; exact search
 is the default reference. `--max-chain-transitions=65536` limits each DP layer
-and reports truncation. See [REGION_OPTIMIZER.md](REGION_OPTIMIZER.md#optimize-a-complete-linear-chain)
-and the recorded [chain experiment](CHAIN_EXPERIMENT.md).
+and reports truncation. See [REGION_OPTIMIZER.md](../misc/REGION_OPTIMIZER.md#optimize-a-complete-linear-chain)
+and the recorded [chain experiment](../misc/CHAIN_EXPERIMENT.md).
 
 Use `--optimize-dag` for residual connections, fan-out, joins, independent
 branches, and multiple region outputs. It retains a layout for every live
@@ -151,16 +155,16 @@ value and layout. Function arguments use the same fixed external contract.
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/residual_block.mlir \
-  --optimize-dag --dump-dir=/tmp/joint_dag \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+  --optimize-dag --output-dir=/tmp/joint_dag \
+  2> /tmp/selection_report.txt
 ```
 
-This emits one verified `@main` and the same three selection artifacts as chain
-mode. `--dag-search=resolved` selects dominance-resolved implementations;
+This writes the same two final artifacts as chain mode.
+`--dag-search=resolved` selects dominance-resolved implementations;
 exact search is the default. `--max-live-values=4` rejects wider live cuts.
 `--max-dag-states=4096` and `--max-dag-transitions=65536` bound each search
-layer and report truncation. See the [DAG search model](REGION_OPTIMIZER.md#optimize-residuals-and-branches)
-and the recorded [DAG experiment](DAG_EXPERIMENT.md).
+layer and report truncation. See the [DAG search model](../misc/REGION_OPTIMIZER.md#optimize-residuals-and-branches)
+and the recorded [DAG experiment](../misc/DAG_EXPERIMENT.md).
 
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
@@ -169,7 +173,7 @@ bazel-bin/research/joint_shard/tools/summarize_regions \
 ```
 
 `run_shardy` runs the raw annotated pipeline. See
-[REGION_OPTIMIZER.md](REGION_OPTIMIZER.md)
+[REGION_OPTIMIZER.md](../misc/REGION_OPTIMIZER.md)
 for boundary policies, cost parameters, budgets and output artifacts.
 
 To inspect rewriting without running propagation:
@@ -224,6 +228,8 @@ The annotated matmul samples use `data=2, model=2`:
 For other input files with `bazel run`, pass an absolute path because Bazel
 changes the working directory to the target's runfiles directory.
 
-Output uses global tensor shapes and Shardy collectives (`sdy.all_gather`,
-`sdy.all_reduce`, etc.). It is verified compiler IR, not device-local executable
-code.
+Selected output uses global tensor shapes and Shardy collectives
+(`sdy.all_gather`, `sdy.all_reduce`, etc.). For chain/DAG selection, this
+optimizer also exports XLA-ready `xla_input.mlir` from the exact same chosen
+path. The separate [Python runner](../joint_shard_executor/README.md) consumes
+that artifact using prebuilt XLA/PJRT, without rerunning propagation or search.

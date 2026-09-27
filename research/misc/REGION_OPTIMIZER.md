@@ -339,8 +339,9 @@ region scheduling and control flow remain future milestones.
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/chain_5.mlir \
-  --optimize-chain --numerical-policy=relaxed --dump-dir=/tmp/joint_chain \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+  --optimize-chain --numerical-policy=relaxed \
+  --output-dir=/tmp/joint_chain --dump-dir=/tmp/joint_chain_debug \
+  2> /tmp/selection_report.txt
 ```
 
 This mode requires exactly one function, a nonempty single-block `@main`, whose
@@ -409,9 +410,10 @@ Only the selected chain is materialized by the CLI. It inlines the chosen
 collective artifacts and all nonidentity adapters into one `@main` without
 rerunning propagation. MLIR verification, input/output layout checks and
 recomputed compute/communication costs remain mandatory. The reconstructed plan
-cost must also agree with the selected prefix cost. Chain mode sends MLIR to
-stdout and reports to stderr; `--dump-dir` additionally writes `selected.mlir`,
-`selected_plan.txt`, and `comparison.txt`, plus existing region diagnostics.
+cost must also agree with the selected prefix cost. Chain mode writes
+`selected.mlir` and `xla_input.mlir` to `--output-dir`, lists their paths on
+stdout, and reports to stderr; `--dump-dir` writes `selected_plan.txt`,
+`comparison.txt`, and region diagnostics.
 Library search remains free of file writes. Original baseline execution nodes
 refer to `OptimizationReport.original_regions`; joint modes refer to `regions`.
 
@@ -447,8 +449,9 @@ input modules or measure hardware runtime.
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/residual_block.mlir \
-  --optimize-dag --dag-search=exact --dump-dir=/tmp/joint_dag \
-  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+  --optimize-dag --dag-search=exact \
+  --output-dir=/tmp/joint_dag --dump-dir=/tmp/joint_dag_debug \
+  2> /tmp/selection_report.txt
 ```
 
 DAG mode supports residual connections, fan-out, joins, independent branches,

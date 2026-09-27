@@ -13,6 +13,8 @@ class ArtifactWriter {
   // Returned callbacks borrow this writer; keep it alive during optimization.
   OptimizationObserver observer() const;
   void writeSnapshot(const ShardySnapshot& snapshot) const;
+  void writeSelectedPrograms(const std::string& selected,
+                             const std::string& xla_input) const;
 
  private:
   void writeText(const std::string& relative, const std::string& text) const;

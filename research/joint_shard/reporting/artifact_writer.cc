@@ -32,6 +32,14 @@ void ArtifactWriter::writeText(const std::string& relative,
 void ArtifactWriter::writeSnapshot(const ShardySnapshot& snapshot) const {
   writeText(snapshot.name + ".mlir", snapshot.mlir);
 }
+void ArtifactWriter::writeSelectedPrograms(const std::string& selected,
+                                           const std::string& xla_input) const {
+  if (directory_.empty())
+    throw std::invalid_argument(
+        "selected programs require an output directory");
+  writeText("selected.mlir", selected);
+  writeText("xla_input.mlir", xla_input);
+}
 OptimizationObserver ArtifactWriter::observer() const {
   if (directory_.empty()) return {};
   OptimizationObserver result;
