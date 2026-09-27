@@ -30,10 +30,20 @@ class RegionEvaluator {
   CostModel model_;
 };
 
+struct ReshardPlan {
+  bool feasible = false;
+  Cost cost{0, 0, 1};
+  TensorSharding from, to;
+  mlir::Type type;
+  // Empty only for an identity adapter.
+  std::string lowered_mlir;
+};
 class ReshardCostOracle {
  public:
   ReshardCostOracle(MeshContext mesh, CostModel model = CostModel{})
       : mesh_(std::move(mesh)), model_(model) {}
+  ReshardPlan plan(const TensorSharding& from, const TensorSharding& to,
+                   mlir::Type type);
   Cost estimate(const TensorSharding& from, const TensorSharding& to,
                 mlir::Type type);
   size_t cacheSize() const { return cache_.size(); }
@@ -41,7 +51,7 @@ class ReshardCostOracle {
  private:
   MeshContext mesh_;
   CostModel model_;
-  std::map<std::string, Cost> cache_;
+  std::map<std::string, ReshardPlan> cache_;
 };
 
 #endif

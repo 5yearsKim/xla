@@ -1,19 +1,49 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "region_interface",
+    srcs = ["region_interface.cc"],
+    hdrs = ["region_interface.h"],
+    deps = [
+        "//research/joint_shard/transforms:regionizer",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_library(
+    name = "region_summary",
+    srcs = ["region_summary.cc"],
+    hdrs = ["region_summary.h"],
+    deps = [
+        ":region_interface",
+        "//research/joint_shard/sharding:region_evaluator",
+    ],
+)
+
+cc_library(
+    name = "pair_composer",
+    srcs = ["pair_composer.cc"],
+    hdrs = ["pair_composer.h"],
+    deps = [
+        ":region_summary",
+        "//research/joint_shard/sharding:plan_materializer",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
 cc_library(
     name = "region_optimizer",
-    srcs = [
-        "region_optimizer.cc",
-        "region_summary.cc",
-    ],
-    hdrs = [
-        "region_optimizer.h",
-        "region_summary.h",
-    ],
+    srcs = ["region_optimizer.cc"],
+    hdrs = ["region_optimizer.h"],
     deps = [
+        ":pair_composer",
+        "//research/joint_shard/bridge:stablehlo_importer",
         "//research/joint_shard/sharding:region_evaluator",
         "//research/joint_shard/transforms:region_candidates",
-        "//research/joint_shard/bridge:stablehlo_importer",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",

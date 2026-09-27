@@ -4,13 +4,16 @@
 
 ```text
 split → saturate once → bounded candidates → candidate × boundary Shardy runs
-      → best per exact boundary → directed reshard-dominance pruning
+      → preserved exact table + directed reshard-dominance frontier
+      → optional pair search → verified combined MLIR per external boundary
 ```
 
 The input module is never rewritten by this command. Each candidate is exported
 as a standalone `@main` function and evaluated on fresh clones. The result is a
-frontier for each region, ready for a future composition phase. It is not a
-selected whole-program implementation or device executable.
+complete boundary table and frontier for each region. Optional two-region
+composition selects and materializes one implementation per external boundary.
+The command does not select a whole-program implementation or emit a device
+executable.
 
 ## Run the prototype
 
@@ -46,7 +49,10 @@ explicit numerical policy.
 | `sharding/boundary_state` | Native exact layouts, mesh selection and bounded enumeration |
 | `sharding/region_evaluator` | Candidate wrappers, isolated Shardy runs and cached reshard adapters |
 | `sharding/cost_model` | One additive microsecond model for candidates and adapters |
-| `search/region_summary` | Best-per-boundary selection, dominance witnesses and reporting |
+| `search/region_interface` | Stable SSA value IDs and typed region/pair port mappings |
+| `search/region_summary` | Preserved best-per-boundary table, frontier IDs and dominance witnesses |
+| `search/pair_composer` | Joint pair search, dominance resolution and materialization orchestration |
+| `sharding/plan_materializer` | Mesh-checked inlining of lowered artifacts and cost verification |
 | `search/region_optimizer` | Orchestration and artifacts |
 
 `parse_stablehlo` remains a bridge/rewrite inspection tool. Its mutation path
@@ -171,7 +177,10 @@ not optimizer selection criteria.
 For each exact boundary, the cheapest known candidate wins. Equal costs prefer
 the original (candidate 0), then the smaller candidate ID. A known estimate can
 replace an unknown estimate; an unknown estimate cannot displace a known one.
-Unknown plans remain inspectable but cannot justify dominance.
+Unknown plans remain inspectable but cannot justify dominance or win pair
+selection. After best-per-boundary selection, plans receive stable `P` IDs.
+Pruning retains the full exact table; the frontier references surviving IDs.
+Every dominance witness stores both the removed and replacement IDs.
 
 For dominance, input adapters convert the removed boundary to the replacement
 boundary; output adapters convert the replacement back to the removed boundary.
@@ -184,7 +193,9 @@ Pruning compares each state against already retained states ordered by cost and
 deterministic layout key. This conservative O(n²) procedure never mutually
 deletes tied states, and every removal has a direct surviving replacement.
 It can retain redundant equal-cost states whose replacement appears later.
-Unsupported or unknown adapters never justify deletion.
+Unsupported or unknown adapters never justify deletion. The reshard oracle
+returns feasibility, cost, type, direction and the lowered adapter module from
+the same lowering. Identity adapters have no operations and zero cost.
 
 ## Artifacts and scope
 
@@ -200,6 +211,8 @@ region_0/
   boundary_0/candidate_0/03_collectives.mlir
   ...
   summary.txt
+  exact_P0.mlir
+  ...
   frontier_0.mlir
   ...
 ```
@@ -207,8 +220,107 @@ region_0/
 Frontier artifact indices follow the table order in `summary.txt`. Use a fresh
 dump directory for each experiment; the tool does not delete previous artifacts.
 
-This version does not compose summaries, apply a global winner, merge regions,
-re-saturate seams, cluster candidates, infer tensor roles, or do sharding-aware
-e-graph extraction. Its frontier is relative to the sampled candidate/layout
-sets, Shardy propagation and the configured cost model. The next architectural
-extension is composition over the shared typed boundary interfaces.
+## Compose two regions
+
+The default exact mode searches the complete child boundary tables:
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/pair_scaling_dot.mlir \
+  --compose-regions=0,1 \
+  --dump-dir=/tmp/joint_shard_pair
+```
+
+Region 0 contains the scaling and dot; region 1 contains tanh. Their 27 and 9
+exact plans produce 243 evaluated pairs and 27 external boundary winners.
+`pair_0_1/summary.txt` explains the external SSA values, input bindings, selected
+child plans/rewrites, intermediate layouts and component costs. For each row:
+
+```text
+pair_0_1/
+  summary.txt
+  selected_0.mlir          # one mesh and combined @main
+  selected_0_adapter.mlir  # intermediate adapter, or an identity comment
+  ...
+```
+
+`selected_0` is the winner for its displayed external boundary, rather than a
+winner across all outer layouts. `R` means replicated; `model:d1` means the
+model axis shards tensor dimension 1. `P` identifies a child exact plan and
+`R0`, `R1`, etc. identify rewrite candidates. Read `A + adapter + B = total`
+with each child including any dominance-resolution wrappers. Compute and
+communication are also shown separately for the combined plan.
+
+A and B must be adjacent operation ranges in the same single-block function.
+A must have exactly one output, consumed by B, and every use of that value must
+be inside B. Fan-out and an intermediate returned from the original function
+are rejected. Composition cannot cross a preserved unsupported/fixed operation.
+B may have additional external inputs and multiple outputs. Shared external
+inputs are deduplicated by SSA identity and must have identical requested
+layouts in both children. Equal tensor types alone never establish identity.
+Value IDs are deterministic for the current module; they are not identities
+across source edits.
+
+The external input order is A's inputs followed by B's remaining inputs in
+first-use order. The intermediate disappears from the external interface.
+Outputs retain B's order. Per-port layout policies are applied to each child
+before composition; they are not reapplied to the new external port indices.
+The selected mesh, numerical policy and cost model are shared by both children.
+
+For every pair, the composer projects the outer boundary and costs the directed
+A-output → B-input adapter. It retains the smallest known sum for each outer
+boundary; ties use requested child plan IDs. `--max-pair-evaluations=65536`
+bounds this Cartesian search. Caps, shared-layout rejections and unknown costs
+are reported. A capped run searches a deterministic prefix and can miss better
+plans and outer states; child candidate and boundary caps still apply.
+
+Materialization inlines the selected child collective modules and the actual
+adapter artifact using SSA mappings, into one `@main` with exact outer attrs.
+It preserves closed internal layouts and treats absent internal post-propagation
+sharding as replication. It does not rerun propagation. Every emitted module
+must pass MLIR verification, layout/type checks and recomputed compute and
+communication cost checks against the selected sum (relative tolerance 1e-9).
+The source module is unchanged.
+
+### Compose through the pruned frontier
+
+Add `--compose-pruned` to resolve each requested exact child boundary to its
+retained implementation. Input adapters run requested → retained; output
+adapters run retained → requested. These executable wrappers preserve every
+callable exact boundary, including the removed states. The report distinguishes
+requested and implemented plan IDs, and charges all wrapper costs.
+
+This mode still enumerates the original exact boundary space, so it is a
+correctness milestone rather than a faster search algorithm. With the same
+oracle and uncapped search, its cost for each outer boundary is no greater than
+the exact-mode reference. It can be smaller because adapter-wrapped retained
+plans add implementations to the original exact table. Unknown adapters cannot
+justify a replacement. Every witness resolves directly to a surviving plan.
+
+### A rewrite whose winner depends on layout
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/pair_boundary_rewrite.mlir \
+  --input-policy=1:none:1 --input-policy=2:none:0 \
+  --compose-regions=0,1 --dump-dir=/tmp/joint_shard_boundary_rewrite
+```
+
+The fixture computes `dot(a,b) + dot(a,c)` followed by tanh. `a` is 2×256;
+`b` and `c` are 256×256. With fully replicated inputs/output, factoring to
+`dot(a,b+c)` wins (candidate R1). With `a` replicated, `b` sharded on model
+dimension 1, `c` on model dimension 0 and the dot output on model dimension 1,
+the original two-dot form wins (R0): factoring must communicate a large RHS
+rather than small dot outputs. The regression compares both real Shardy
+lowerings and costs; this result is not a mocked scoring example.
+
+The tests also include a synthetic example where greedy child selection costs
+7 while joint selection costs 4, an independent exhaustive real-cost reference,
+all nine canonical adapter directions, resolved-frontier cost preservation,
+shared input identity/layout checks and multiple-output materialization.
+
+This version does not apply a whole-program winner, merge or re-saturate region
+seams, cluster candidates, infer tensor roles, or do sharding-aware e-graph
+extraction. Its results are relative to the sampled candidates/layouts, Shardy
+propagation and the configured illustrative cost model. Multi-region dynamic
+programming and device execution remain future milestones.

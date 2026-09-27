@@ -1,6 +1,7 @@
 test_suite(
     name = "tests",
     tests = [
+        "//research/joint_shard/tests:pair_composition_test",
         "//research/joint_shard/tests:region_optimizer_test",
         "//research/joint_shard/tests:tensor_extraction_test",
         "//research/joint_shard/egg-c/tests:language_test",

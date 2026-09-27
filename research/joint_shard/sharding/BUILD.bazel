@@ -60,3 +60,18 @@ cc_library(
         "@shardy//shardy/dialect/sdy/ir:dialect",
     ],
 )
+
+cc_library(
+    name = "plan_materializer",
+    srcs = ["plan_materializer.cc"],
+    hdrs = ["plan_materializer.h"],
+    deps = [
+        ":boundary_state",
+        ":cost_model",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+    ],
+)

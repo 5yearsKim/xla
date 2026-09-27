@@ -6,25 +6,27 @@
 #include <string>
 #include <vector>
 
+#include "research/joint_shard/search/region_interface.h"
 #include "research/joint_shard/sharding/region_evaluator.h"
+using PlanId = size_t;
 
 struct RegionPlan {
   size_t candidate_id = 0;
   BoundaryState boundary;
   Cost cost;
   std::string lowered_mlir;
+  PlanId id = 0;
 };
 struct DominanceWitness {
   BoundaryState removed;
   BoundaryState replacement;
   Cost adapters;
   double replacement_total = 0;
+  PlanId removed_id = 0, replacement_id = 0;
 };
 struct RegionSummary {
   size_t id = 0;
   size_t operations = 0;
-  size_t inputs = 0;
-  size_t outputs = 0;
   bool oversized = false;
   bool boundary_search_truncated = false;
   size_t boundaries_evaluated = 0;
@@ -33,10 +35,11 @@ struct RegionSummary {
   size_t unknown_cost_plans = 0;
   size_t best_boundary_plans = 0;
   std::map<std::string, size_t> failures;
-  std::vector<mlir::Type> input_types;
-  std::vector<mlir::Type> output_types;
   std::vector<Candidate> candidates;
+  RegionInterface interface;
+  // Complete exact table; pruning only modifies frontier and witnesses.
   std::vector<RegionPlan> plans;
+  std::vector<PlanId> frontier;
   std::vector<DominanceWitness> dominance;
 
   void record(size_t candidate_id, const BoundaryState& boundary,

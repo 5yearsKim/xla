@@ -19,7 +19,7 @@ joint_shard/
   bridge/           # TensorLang nodes and StableHLO ↔ egg-c import/export
   transforms/       # region discovery, saturation and candidate extraction
   sharding/         # boundary layouts, Shardy evaluation and costs
-  search/           # region summaries, dominance pruning and orchestration
+  search/           # typed interfaces, region tables, pair composition and orchestration
   tools/            # command-line executables
   tests/            # cross-component C++ integration tests
   testdata/         # MLIR fixtures
@@ -94,8 +94,10 @@ Contiguous supported islands share one graph and export cache across all outputs
 once per region, evaluates unique original/compute/depth/memory candidates under
 exact boundary layouts, retains the best candidate per boundary, and prunes
 states served more cheaply by another plan plus directed reshards. It prints
-region frontiers and preserves the source module. Candidate count defaults to a
-cap of 32, with at most five distinct profile candidates in this milestone.
+region frontiers and preserves the source module. Add `--compose-regions=0,1`
+to search and emit verified combined modules for an adjacent pair; see the
+[composition guide](REGION_OPTIMIZER.md#compose-two-regions). Candidate count
+defaults to a cap of 32, with at most five distinct profile candidates in this milestone.
 
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \

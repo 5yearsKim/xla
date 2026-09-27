@@ -386,20 +386,24 @@ TEST_F(RegionOptimizerTest,
   auto choices = tensorLayoutChoices(type, mesh, {}, {});
   BoundaryState a{{choices[0]}, {choices[0]}}, b{{choices[1]}, {choices[1]}};
   RegionSummary summary;
-  summary.input_types = {type};
-  summary.output_types = {type};
+  summary.interface.inputs = {{0, type}};
+  summary.interface.outputs = {{1, type}};
   summary.plans = {{0, a, {10, 0, 0}, ""}, {1, b, {6, 0, 0}, ""}};
   std::vector<std::pair<TensorSharding, TensorSharding>> requests;
+  summary.keepBestPerBoundary();
   pruneDominatedStates(summary, [&](auto from, auto to, auto tensor) {
     EXPECT_EQ(tensor, type);
     requests.emplace_back(from, to);
     return Cost{0, from == to ? 0.0 : 1.0, 0};
   });
-  ASSERT_EQ(summary.plans.size(), 1);
-  EXPECT_EQ(summary.plans[0].boundary, b);
+  ASSERT_EQ(summary.frontier.size(), 1);
+  EXPECT_EQ(summary.plans.at(summary.frontier[0]).boundary, b);
+  EXPECT_EQ(summary.plans.size(), 2);
   ASSERT_EQ(summary.dominance.size(), 1);
   EXPECT_EQ(summary.dominance[0].replacement, b);
   EXPECT_EQ(summary.dominance[0].replacement_total, 8);
+  auto witness_id = summary.dominance[0].replacement_id;
+  EXPECT_EQ(summary.plans.at(witness_id).boundary, b);
   ASSERT_EQ(requests.size(), 2);
   EXPECT_EQ(requests[0], std::make_pair(choices[0], choices[1]));
   EXPECT_EQ(requests[1], std::make_pair(choices[1], choices[0]));
@@ -413,14 +417,15 @@ TEST_F(RegionOptimizerTest, TiesAndUnknownAdaptersDoNotDeleteEveryState) {
   auto choices = tensorLayoutChoices(type, mesh, {}, {});
   for (bool unknown : {false, true}) {
     RegionSummary summary;
-    summary.input_types = {type};
-    summary.output_types = {type};
+    summary.interface.inputs = {{0, type}};
+    summary.interface.outputs = {{1, type}};
     summary.plans = {{0, {{choices[0]}, {choices[0]}}, {1, 0, 0}, ""},
                      {1, {{choices[1]}, {choices[1]}}, {1, 0, 0}, ""}};
+    summary.keepBestPerBoundary();
     pruneDominatedStates(summary, [&](auto, auto, auto) {
       return Cost{0, 0, unknown ? 1U : 0U};
     });
-    EXPECT_EQ(summary.plans.size(), unknown ? 2 : 1);
+    EXPECT_EQ(summary.frontier.size(), unknown ? 2 : 1);
   }
 }
 
@@ -436,7 +441,8 @@ TEST_F(RegionOptimizerTest, EndToEndBuildsFrontierWithoutMutatingSource) {
   EXPECT_EQ(summary.best_boundary_plans, 27);
   EXPECT_EQ(summary.unknown_cost_plans, 0);
   EXPECT_FALSE(summary.plans.empty());
-  EXPECT_LT(summary.plans.size(), summary.best_boundary_plans);
+  EXPECT_LT(summary.frontier.size(), summary.best_boundary_plans);
+  EXPECT_EQ(summary.plans.size(), summary.best_boundary_plans);
   for (const auto& plan : summary.plans) {
     EXPECT_TRUE(plan.cost.known());
     EXPECT_NE(plan.lowered_mlir.find("func.func @main"), std::string::npos);

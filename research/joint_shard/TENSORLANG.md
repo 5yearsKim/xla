@@ -227,7 +227,10 @@ DAG or scheduling/liveness optimizer is implemented.
 `summarize_regions` owns joint region candidate/layout search. It saturates each
 region once, preserves the original source expression, extracts bounded unique
 profile candidates with ordered shared roots, evaluates each under exact boundary
-states on independent Shardy clones, and produces a reshard-pruned region frontier.
+states on independent Shardy clones, and preserves exact boundary tables alongside a reshard-pruned region frontier.
+Optional `--compose-regions=A,B` searches adjacent region pairs and materializes
+verified child-plus-adapter modules for each external boundary.
+`--compose-pruned` adds executable wrappers for dominance-resolved child plans.
 Driver options default to relaxed floating-point algebra. Low-level semantic
 APIs retain explicit strict/relaxed policies and all existing guards.
 

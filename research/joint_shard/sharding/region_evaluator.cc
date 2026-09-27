@@ -104,13 +104,21 @@ EvaluationResult RegionEvaluator::evaluate(
   return result;
 }
 
-Cost ReshardCostOracle::estimate(const TensorSharding& from,
-                                 const TensorSharding& to, mlir::Type type) {
+ReshardPlan ReshardCostOracle::plan(const TensorSharding& from,
+                                    const TensorSharding& to, mlir::Type type) {
+  ReshardPlan result;
+  result.from = from;
+  result.to = to;
+  result.type = type;
   auto tensor = llvm::dyn_cast<mlir::RankedTensorType>(type);
   if (!tensor || !validExactSharding(from, tensor, mesh_) ||
       !validExactSharding(to, tensor, mesh_))
-    return {0, 0, 1};
-  if (from == to) return {};
+    return result;
+  if (from == to) {
+    result.feasible = true;
+    result.cost = {};
+    return result;
+  }
   std::string key;
   llvm::raw_string_ostream out(key);
   out << type << "|" << from.str() << "|" << to.str();
@@ -126,9 +134,17 @@ Cost ReshardCostOracle::estimate(const TensorSharding& from,
   auto adapter = builder.create<mlir::sdy::ReshardOp>(
       location, function.getArgument(0), to.attr);
   builder.create<mlir::func::ReturnOp>(location, adapter.getResult());
-  Cost cost{0, 0, 1};
   if (mlir::succeeded(mlir::verify(*module)) &&
-      mlir::succeeded(lowerReshardsToCollectives(*module)))
-    cost = model_.estimate(*module, mesh_.mesh);
-  return cache_[key] = cost;
+      mlir::succeeded(lowerReshardsToCollectives(*module)) &&
+      mlir::succeeded(mlir::verify(*module))) {
+    result.cost = model_.estimate(*module, mesh_.mesh);
+    result.feasible = result.cost.known();
+    llvm::raw_string_ostream text(result.lowered_mlir);
+    module->print(text);
+  }
+  return cache_[key] = result;
+}
+Cost ReshardCostOracle::estimate(const TensorSharding& from,
+                                 const TensorSharding& to, mlir::Type type) {
+  return plan(from, to, type).cost;
 }

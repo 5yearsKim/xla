@@ -43,7 +43,8 @@ int main(int argc, char** argv) {
     llvm::errs()
         << "Usage: summarize_regions <file.mlir> [--mesh=name] "
            "[--max-region-ops=128] [--max-candidates=32] "
-           "[--max-boundary-states=256] "
+           "[--max-boundary-states=256] [--compose-regions=0,1] "
+           "[--compose-pruned] [--max-pair-evaluations=65536] "
            "[--data-axis=data] [--model-axis=model] [--data-dim=0|none] "
            "[--model-dim=-1|none] [--input-policy=PORT:DATA_DIM:MODEL_DIM] "
            "[--output-policy=PORT:DATA_DIM:MODEL_DIM] [--rule-blocker=op|none] "
@@ -62,7 +63,25 @@ int main(int argc, char** argv) {
       auto name = argument.substr(0, at);
       auto value = at == std::string_view::npos ? std::string_view{}
                                                 : argument.substr(at + 1);
-      if (name == "--max-region-ops")
+      if (name == "--compose-pruned")
+        options.compose_pruned = true;
+      else if (name == "--max-pair-evaluations")
+        options.max_pair_evaluations = positive(value);
+      else if (name == "--compose-regions") {
+        auto comma = value.find(',');
+        if (comma == std::string_view::npos)
+          throw std::invalid_argument("expected A,B region indices");
+        auto index = [](std::string_view text) {
+          size_t result = 0;
+          auto [end, error] =
+              std::from_chars(text.data(), text.data() + text.size(), result);
+          if (error != std::errc{} || end != text.data() + text.size())
+            throw std::invalid_argument("invalid region index");
+          return result;
+        };
+        options.compose_regions = {
+            {index(value.substr(0, comma)), index(value.substr(comma + 1))}};
+      } else if (name == "--max-region-ops")
         options.regionizer.max_region_ops = positive(value);
       else if (name == "--max-candidates")
         options.max_candidates = positive(value);

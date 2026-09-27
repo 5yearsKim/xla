@@ -46,8 +46,13 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
                                     const RegionOptimizerOptions& options) {
   if (mlir::failed(mlir::verify(module)))
     throw std::invalid_argument("invalid input module");
-  if (!options.max_candidates || !options.max_boundary_states)
+  if (!options.max_candidates || !options.max_boundary_states ||
+      !options.max_pair_evaluations)
     throw std::invalid_argument("search caps must be positive");
+  if (options.compose_pruned && !options.compose_regions)
+    throw std::invalid_argument("--compose-pruned requires --compose-regions");
+  ValueIndex values(module);
+  std::vector<Region> source_regions;
   OptimizationReport report;
   report.mesh = selectMesh(module, options.mesh_name);
   if (auto partitions =
@@ -73,15 +78,11 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
       auto saturated = saturateRegion(region, rules, options.rewriting);
       report.saturation.push_back(saturated.report);
       RegionSummary summary;
+      source_regions.push_back(region);
+      summary.interface = values.interface(region);
       summary.id = region.id;
       summary.operations = region.operations.size();
-      summary.inputs = region.inputs.size();
-      summary.outputs = region.outputs.size();
       summary.oversized = region.oversized;
-      for (auto value : region.inputs)
-        summary.input_types.push_back(value.getType());
-      for (auto value : region.outputs)
-        summary.output_types.push_back(value.getType());
       summary.candidates = extractCandidates(saturated, options.rewriting,
                                              options.max_candidates);
       auto boundaries = enumerateBoundaryStates(
@@ -134,12 +135,22 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
         out.flush();
         if (out.has_error())
           throw std::runtime_error("failed to write summary");
-        for (size_t p = 0; p < summary.plans.size(); ++p) {
+        for (const auto& plan : summary.plans) {
+          llvm::raw_fd_ostream artifact(
+              regionDirectory + "/exact_P" + std::to_string(plan.id) + ".mlir",
+              error);
+          if (error) throw std::runtime_error(error.message());
+          artifact << plan.lowered_mlir;
+          artifact.flush();
+          if (artifact.has_error())
+            throw std::runtime_error("failed to write exact plan");
+        }
+        for (size_t p = 0; p < summary.frontier.size(); ++p) {
           llvm::raw_fd_ostream artifact(
               regionDirectory + "/frontier_" + std::to_string(p) + ".mlir",
               error);
           if (error) throw std::runtime_error(error.message());
-          artifact << summary.plans[p].lowered_mlir;
+          artifact << summary.plans.at(summary.frontier[p]).lowered_mlir;
           artifact.flush();
           if (artifact.has_error())
             throw std::runtime_error("failed to write frontier");
@@ -147,6 +158,49 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
       }
       report.regions.push_back(std::move(summary));
     }
+  }
+  if (options.compose_regions) {
+    auto [a, b] = *options.compose_regions;
+    if (a >= report.regions.size() || b >= report.regions.size())
+      throw std::invalid_argument("composition region index out of range");
+    auto interface =
+        buildPairInterface(source_regions[a], source_regions[b], values);
+    auto pair = composePair(
+        report.regions[a], report.regions[b], interface,
+        [&](const TensorSharding& from, const TensorSharding& to,
+            mlir::Type type) { return oracle.plan(from, to, type); },
+        options.max_pair_evaluations, options.compose_pruned);
+    std::string directory;
+    if (!options.dump_directory.empty()) {
+      directory = options.dump_directory + "/pair_" + std::to_string(a) + "_" +
+                  std::to_string(b);
+      if (auto error = llvm::sys::fs::create_directories(directory))
+        throw std::runtime_error(error.message());
+    }
+    auto dumpText = [&](const std::string& name, const std::string& text) {
+      std::error_code error;
+      llvm::raw_fd_ostream out(directory + "/" + name, error);
+      if (error) throw std::runtime_error(error.message());
+      out << text;
+      out.flush();
+      if (out.has_error())
+        throw std::runtime_error("failed to write pair artifact");
+    };
+    for (size_t i = 0; i < pair.plans.size(); ++i) {
+      auto& plan = pair.plans[i];
+      plan.lowered_mlir = materializePair(report.regions[a], report.regions[b],
+                                          interface, plan, report.mesh, model);
+      if (!directory.empty()) {
+        auto prefix = "selected_" + std::to_string(i);
+        dumpText(prefix + ".mlir", plan.lowered_mlir);
+        dumpText(prefix + "_adapter.mlir",
+                 plan.intermediate.lowered_mlir.empty()
+                     ? "// Identity adapter: no operations, zero cost.\n"
+                     : plan.intermediate.lowered_mlir);
+      }
+    }
+    if (!directory.empty()) dumpText("summary.txt", pair.str());
+    report.compositions.push_back(std::move(pair));
   }
   return report;
 }
@@ -164,5 +218,6 @@ std::string OptimizationReport::str() const {
     out << "Saturation iterations=" << run.iterations << " nodes=" << run.nodes
         << " stop=" << stopName(run.reason) << '\n';
   }
+  for (const auto& pair : compositions) out << pair.str();
   return out.str();
 }

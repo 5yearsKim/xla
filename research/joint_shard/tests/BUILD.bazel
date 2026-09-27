@@ -105,3 +105,21 @@ cc_test(
         "@stablehlo//:stablehlo_ops",
     ],
 )
+
+cc_test(
+    name = "pair_composition_test",
+    srcs = ["pair_composition_test.cc"],
+    data = ["//research/joint_shard/testdata:samples"],
+    linkstatic = True,
+    deps = [
+        "//research/joint_shard/search:region_optimizer",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+    ],
+)
