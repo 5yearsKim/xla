@@ -3,54 +3,10 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "research/joint_shard/sharding/plan_materializer.h"
+#include "research/joint_shard/search/execution_plan.h"
 
 namespace joint_shard {
 
-ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
-                                     PlanId requested, bool use_frontier,
-                                     const ReshardPlanner& oracle) {
-  const auto& exact = region.plans.at(requested);
-  ResolvedRegionPlan result;
-  result.requested = requested;
-  result.implementation = requested;
-  result.boundary = exact.boundary;
-  if (use_frontier) {
-    for (const auto& witness : region.dominance)
-      if (witness.removed_id == requested) {
-        result.implementation = witness.replacement_id;
-        break;
-      }
-    if (std::find(region.frontier.begin(), region.frontier.end(),
-                  result.implementation) == region.frontier.end())
-      throw std::invalid_argument(
-          "dominance witness does not resolve directly to frontier");
-  }
-  const auto& core = region.plans.at(result.implementation);
-  result.candidate_id = core.candidate_id;
-  result.core_cost = core.cost;
-  for (size_t i = 0; i < exact.boundary.inputs.size(); ++i) {
-    auto adapter = oracle(exact.boundary.inputs[i], core.boundary.inputs[i],
-                          region.interface.inputs.at(i).type);
-    result.adapters_cost += adapter.cost;
-    if (!adapter.feasible) ++result.adapters_cost.unknown;
-    result.input_adapters.push_back(std::move(adapter));
-  }
-  for (size_t i = 0; i < exact.boundary.outputs.size(); ++i) {
-    auto adapter = oracle(core.boundary.outputs[i], exact.boundary.outputs[i],
-                          region.interface.outputs.at(i).type);
-    result.adapters_cost += adapter.cost;
-    if (!adapter.feasible) ++result.adapters_cost.unknown;
-    result.output_adapters.push_back(std::move(adapter));
-  }
-  result.cost = result.core_cost;
-  result.cost += result.adapters_cost;
-  if (use_frontier && exact.cost.known() && result.cost.known() &&
-      result.cost.total() > exact.cost.total() + 1e-9)
-    throw std::invalid_argument(
-        "resolved plan exceeds exact cost (inconsistent oracle)");
-  return result;
-}
 PairSummary composePair(const RegionSummary& a, const RegionSummary& b,
                         const PairInterface& interface,
                         const ReshardPlanner& oracle, size_t cap,
@@ -155,45 +111,26 @@ PairSummary composePair(const RegionSummary& a, const RegionSummary& b,
   for (auto& [key, plan] : best) result.plans.push_back(std::move(plan));
   return result;
 }
-namespace {
-mlir::Value adapt(PlanMaterializer& builder, const ReshardPlan& adapter,
-                  mlir::Value input) {
-  if (!adapter.feasible)
-    throw std::invalid_argument("cannot materialize infeasible adapter");
-  if (adapter.from == adapter.to) return input;
-  if (adapter.lowered_mlir.empty())
-    throw std::invalid_argument("nonidentity adapter lacks artifact");
-  return builder.inlineArtifact(adapter.lowered_mlir, {input}).at(0);
-}
-std::vector<mlir::Value> inlineRegion(PlanMaterializer& builder,
-                                      const RegionSummary& summary,
-                                      const ResolvedRegionPlan& plan,
-                                      std::vector<mlir::Value> inputs) {
-  for (size_t i = 0; i < inputs.size(); ++i)
-    inputs[i] = adapt(builder, plan.input_adapters.at(i), inputs[i]);
-  auto outputs = builder.inlineArtifact(
-      summary.plans.at(plan.implementation).lowered_mlir, inputs);
-  for (size_t i = 0; i < outputs.size(); ++i)
-    outputs[i] = adapt(builder, plan.output_adapters.at(i), outputs[i]);
-  return outputs;
-}
-}  // namespace
 std::string materializePair(const RegionSummary& a, const RegionSummary& b,
                             const PairInterface& interface,
                             const ComposedPlan& plan, const MeshContext& mesh,
                             const CostModel& model) {
-  std::vector<mlir::Type> inputs, outputs;
-  for (auto port : interface.external.inputs) inputs.push_back(port.type);
-  for (auto port : interface.external.outputs) outputs.push_back(port.type);
-  PlanMaterializer builder(mesh, inputs, outputs, plan.boundary);
-  std::vector<mlir::Value> ai, bi;
-  for (auto i : interface.a_inputs) ai.push_back(builder.arguments()[i]);
-  auto av = inlineRegion(builder, a, plan.a, std::move(ai));
-  auto h = adapt(builder, plan.intermediate, av.at(0));
-  for (auto i : interface.b_inputs)
-    bi.push_back(i < 0 ? h : builder.arguments()[i]);
-  auto bv = inlineRegion(builder, b, plan.b, std::move(bi));
-  return builder.finish(bv, plan.cost, model);
+  ExecutionPlan execution;
+  std::vector<ExecutionPlanId> children{execution.resolved(0, a, plan.a)};
+  if (plan.intermediate.from != plan.intermediate.to)
+    children.push_back(
+        execution.adapter(interface.intermediate, plan.intermediate));
+  children.push_back(execution.resolved(1, b, plan.b));
+  execution.root = execution.composite(interface.external, plan.boundary,
+                                       std::move(children));
+  const auto& cost = execution.nodes.at(execution.root).cost;
+  if (std::abs(cost.compute - plan.cost.compute) > 1e-9 ||
+      std::abs(cost.communication - plan.cost.communication) > 1e-9)
+    throw std::runtime_error(
+        "selected pair cost disagrees with execution plan");
+  const RegionSummary* regions[] = {&a, &b};
+  return materializeExecutionPlan(execution, llvm::ArrayRef(regions), mesh,
+                                  model);
 }
 
 }  // namespace joint_shard

@@ -79,7 +79,11 @@ std::string formatReport(const RegionSummary& report) {
       << "\nUnknown-cost evaluations: " << report.unknown_cost_plans
       << "\nOversized protected region: " << report.oversized
       << "\nBoundary search truncated: " << report.boundary_search_truncated
-      << '\n';
+      << "\nCandidate profiles skipped at cap: "
+      << report.candidate_profiles_skipped
+      << "\nExtraction limited: " << report.extraction_limited
+      << "\nExtraction states: " << report.extraction_states
+      << "\nExtraction search(us): " << report.extraction_us << '\n';
   for (const auto& [reason, count] : report.failures)
     out << "Rejected: " << reason << " count=" << count << '\n';
   for (const auto& candidate : report.candidates)
@@ -179,6 +183,155 @@ std::string formatReport(const OptimizationReport& report) {
         << " stop=" << stopName(run.reason) << '\n';
   }
   for (const auto& pair : report.compositions) out << formatReport(pair);
+  if (report.chain) out << formatReport(*report.chain);
+  if (report.dag) out << formatReport(*report.dag);
+  return out.str();
+}
+namespace {
+template <typename Experiment>
+std::string functionComparison(const Experiment& report, const char* kind) {
+  std::ostringstream out;
+  out << std::setprecision(12);
+  out << "\nComplete " << kind << " selection ("
+      << (report.select_resolved ? "resolved" : "exact") << ")\n"
+      << "Fixed external contract: " << report.contract.key() << "\n"
+      << "Numerical rewrite policy: " << report.numerical_policy << "\n"
+      << "Region preparation/evaluation/pruning time(us): "
+      << report.evaluation_us << "\n"
+      << "Boundary truncated: " << report.boundary_truncated
+      << "; candidate profiles skipped at cap: " << report.candidate_cap_reached
+      << "; saturation limited: " << report.saturation_limited
+      << "; extraction limited: " << report.extraction_limited << "\n"
+      << "Extraction states: " << report.extraction_states
+      << "; extraction search(us): " << report.extraction_us << "\n"
+      << "Mode | Compute(us) | Communication(us) | Total(us) | Search(us) | "
+         "States | Transitions | Truncated\n";
+  auto row = [&](const char* name, const auto& result) {
+    out << name << " | ";
+    if (result.feasible)
+      out << result.cost.compute << " | " << result.cost.communication << " | "
+          << result.cost.total();
+    else
+      out << "infeasible | infeasible | " << result.failure;
+    out << " | " << result.search_us << " | " << result.states_retained << " | "
+        << result.transitions << " | " << result.truncated << "\n";
+  };
+  row("original + DP", report.original);
+  row("joint greedy", report.greedy);
+  row("joint exact DP", report.exact);
+  row("joint resolved DP", report.resolved);
+  const auto& selected = report.selected();
+  out << "Selected total(us): " << selected.cost.total() << "\n";
+  if (report.original.feasible)
+    out << "Savings versus original(us): "
+        << report.original.cost.total() - selected.cost.total() << "\n";
+  if (report.greedy.feasible)
+    out << "Savings versus greedy(us): "
+        << report.greedy.cost.total() - selected.cost.total() << "\n";
+  if (selected.truncated)
+    out << "Selection is the lowest-cost complete plan found by capped search; "
+           "the sampled-table minimum is not guaranteed.\n";
+  else
+    out << "Selection minimizes additive region and adapter costs among "
+           "evaluated choices under the fixed contract.\n";
+  out << "Search is relative to sampled candidates/layouts; caps and "
+         "saturation limits above restrict that set.\n";
+  out << "Contract rejections: " << selected.contract_rejections
+      << "; unknown-cost rejections: " << selected.unknown_cost_rejections
+      << "\n";
+  return out.str();
+}
+}  // namespace
+std::string formatComparison(const ChainExperiment& report) {
+  return functionComparison(report, "chain");
+}
+std::string formatComparison(const DagExperiment& report) {
+  std::ostringstream out;
+  out << functionComparison(report, "DAG");
+  out << "Model: fixed source region order, one persistent layout per live "
+         "value, consumer-local adapters.\n"
+      << "Peak live values: " << report.selected().peak_live_values << "\n";
+  auto discarded = [&](const char* name, const DagResult& result) {
+    out << name << " discarded states: " << result.states_discarded << "\n";
+  };
+  discarded("original + DP", report.original);
+  discarded("joint greedy", report.greedy);
+  discarded("joint exact DP", report.exact);
+  discarded("joint resolved DP", report.resolved);
+  return out.str();
+}
+std::string formatReport(const DagExperiment& report) {
+  std::ostringstream out;
+  out << std::setprecision(12) << formatComparison(report);
+  const auto& result = report.selected();
+  for (size_t i = 0; i < result.steps.size(); ++i) {
+    const auto& step = result.steps[i];
+    out << "Region " << i << ": requested P" << step.selected.requested
+        << ", implemented P" << step.selected.implementation << ", candidate R"
+        << step.selected.candidate_id
+        << ", core(us)=" << step.selected.core_cost.total()
+        << ", wrappers(us)=" << step.selected.adapters_cost.total()
+        << ", states retained=" << result.states_per_layer[i]
+        << ", discarded=" << result.discarded_per_layer[i]
+        << ", transition cap=" << result.transitions_truncated_per_layer[i]
+        << "\n";
+    for (size_t j = 0; j < step.incoming.size(); ++j) {
+      const auto& adapter = step.incoming[j];
+      out << "  input " << j << " V"
+          << report.interface.regions[i].inputs[j].value << ": "
+          << adapter.from.str() << " -> " << adapter.to.str()
+          << ", compute(us)=" << adapter.cost.compute
+          << ", communication(us)=" << adapter.cost.communication << "\n";
+    }
+    auto wrapper = [&](const char* kind, size_t port,
+                       const ReshardPlan& adapter) {
+      if (adapter.from == adapter.to) return;
+      out << "  " << kind << " " << port << ": " << adapter.from.str() << " -> "
+          << adapter.to.str() << ", compute(us)=" << adapter.cost.compute
+          << ", communication(us)=" << adapter.cost.communication << "\n";
+    };
+    for (size_t j = 0; j < step.selected.input_adapters.size(); ++j)
+      wrapper("input wrapper", j, step.selected.input_adapters[j]);
+    for (size_t j = 0; j < step.selected.output_adapters.size(); ++j)
+      wrapper("output wrapper", j, step.selected.output_adapters[j]);
+    out << "  Live after region: ";
+    for (size_t j = 0; j < step.live_layouts.size(); ++j)
+      out << "V" << report.interface.live_after[i][j].value << "="
+          << step.live_layouts[j].str() << "; ";
+    out << "\n";
+  }
+  out << "Producer values are preserved for later consumers; input adaptations "
+         "stay local to the consuming region.\n"
+      << "Emitted MLIR verifies types, exact layouts and recomputed cost; "
+         "numerical checks are fixture tests, not execution of this input.\n";
+  return out.str();
+}
+std::string formatReport(const ChainExperiment& report) {
+  std::ostringstream out;
+  out << std::setprecision(12) << formatComparison(report);
+  const auto& selected = report.selected();
+  for (size_t i = 0; i < selected.steps.size(); ++i) {
+    const auto& step = selected.steps[i];
+    out << "Region " << step.region << ": requested P"
+        << step.selected.requested << ", implemented P"
+        << step.selected.implementation << ", candidate R"
+        << step.selected.candidate_id
+        << ", core(us)=" << step.selected.core_cost.total()
+        << ", wrappers(us)=" << step.selected.adapters_cost.total()
+        << ", retained states=" << selected.states_per_layer[i] << "\n";
+    auto adapter = [&](const char* kind, size_t port, const ReshardPlan& p) {
+      out << "  " << kind << " " << port << ": " << p.from.str() << " -> "
+          << p.to.str() << ", compute(us)=" << p.cost.compute
+          << ", communication(us)=" << p.cost.communication << "\n";
+    };
+    if (step.incoming) adapter("incoming adapter", 0, *step.incoming);
+    for (size_t j = 0; j < step.selected.input_adapters.size(); ++j)
+      adapter("input wrapper", j, step.selected.input_adapters[j]);
+    for (size_t j = 0; j < step.selected.output_adapters.size(); ++j)
+      adapter("output wrapper", j, step.selected.output_adapters[j]);
+  }
+  out << "Emitted MLIR verifies types, exact layouts and recomputed cost; "
+         "numerical checks are fixture tests and are not run on this input.\n";
   return out.str();
 }
 std::string formatReport(const TensorRewriteReport& report) {

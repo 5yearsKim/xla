@@ -32,6 +32,9 @@ struct RegionSummary {
   size_t operations = 0;
   bool oversized = false;
   bool boundary_search_truncated = false;
+  bool candidate_profiles_skipped = false, extraction_limited = false;
+  size_t extraction_states = 0;
+  double extraction_us = 0;
   size_t boundaries_evaluated = 0;
   size_t evaluations = 0;
   size_t feasible_plans = 0;

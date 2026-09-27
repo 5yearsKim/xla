@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "llvm/ADT/ArrayRef.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
@@ -60,10 +61,15 @@ struct BoundaryEnumeration {
   std::vector<BoundaryState> states;
   bool truncated = false;
 };
-BoundaryEnumeration enumerateBoundaryStates(const Region& region,
-                                            const MeshContext& mesh,
-                                            const LayoutPolicy& policy = {},
-                                            size_t max_states = 256);
+BoundaryEnumeration enumerateBoundaryStates(
+    const Region& region, const MeshContext& mesh,
+    const LayoutPolicy& policy = {}, size_t max_states = 256,
+    const std::map<void*, TensorSharding>& fixed_inputs = {},
+    const std::map<void*, TensorSharding>& fixed_outputs = {});
+// One exact contract: preserve annotations, close open dimensions without
+// adding axes, and replicate unconstrained ports.
+BoundaryState functionLayoutContract(mlir::func::FuncOp function,
+                                     const MeshContext& mesh);
 bool validExactSharding(TensorSharding sharding, mlir::RankedTensorType type,
                         const MeshContext& mesh);
 

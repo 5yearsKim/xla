@@ -23,3 +23,15 @@ cc_library(
         "//research/joint_shard/transforms:regionizer",
     ],
 )
+
+cc_library(
+    name = "fixture_interpreter",
+    srcs = ["fixture_interpreter.cc"],
+    hdrs = ["fixture_interpreter.h"],
+    deps = [
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)

@@ -76,6 +76,16 @@ OptimizationObserver ArtifactWriter::observer() const {
                     : adapter);
     }
   };
+  result.chain_completed = [this](const ChainExperiment& chain) {
+    writeText("selected.mlir", chain.selected().lowered_mlir);
+    writeText("selected_plan.txt", formatReport(chain));
+    writeText("comparison.txt", formatComparison(chain));
+  };
+  result.dag_completed = [this](const DagExperiment& dag) {
+    writeText("selected.mlir", dag.selected().lowered_mlir);
+    writeText("selected_plan.txt", formatReport(dag));
+    writeText("comparison.txt", formatComparison(dag));
+  };
   return result;
 }
 

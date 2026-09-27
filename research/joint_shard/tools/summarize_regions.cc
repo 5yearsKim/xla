@@ -62,10 +62,25 @@ int main(int argc, char** argv) {
                                        "Maximum candidates per region",
                                        cxxopts::value<std::string>())(
         "max-boundary-states", "Maximum boundary states",
-        cxxopts::value<std::string>())("compose-regions",
-                                       "Compose adjacent region indices A,B",
+        cxxopts::value<std::string>())(
+        "optimize-chain", "Select one complete linear-chain implementation")(
+        "optimize-dag",
+        "Select one implementation with residuals and branching")(
+        "dag-search", "Selected DAG search: exact or resolved",
+        cxxopts::value<std::string>())(
+        "max-live-values", "Maximum intermediate values in any DAG live cut",
+        cxxopts::value<std::string>())("max-dag-states",
+                                       "Maximum retained DAG states per cut",
                                        cxxopts::value<std::string>())(
-        "compose-pruned", "Include candidates removed by pruning")(
+        "max-dag-transitions", "Maximum DAG transitions per region",
+        cxxopts::value<std::string>())(
+        "chain-search", "Selected chain search: exact or resolved",
+        cxxopts::value<std::string>())("max-chain-transitions",
+                                       "Maximum transitions per chain layer",
+                                       cxxopts::value<std::string>())(
+        "compose-regions", "Compose adjacent region indices A,B",
+        cxxopts::value<std::string>())("compose-pruned",
+                                       "Include candidates removed by pruning")(
         "max-pair-evaluations", "Maximum pair evaluations",
         cxxopts::value<std::string>())("data-axis",
                                        "Mesh axis for data parallelism",
@@ -109,7 +124,28 @@ int main(int argc, char** argv) {
       const std::string& value = argument.value();
       if (name == "input") continue;
       if (applyRewriteCliOption(name, value, options.rewriting)) continue;
-      if (name == "compose-pruned")
+      if (name == "optimize-chain")
+        options.optimize_chain = true;
+      else if (name == "optimize-dag")
+        options.optimize_dag = true;
+      else if (name == "max-live-values")
+        options.dag.max_live_values = positive(value);
+      else if (name == "max-dag-states")
+        options.dag.max_states = positive(value);
+      else if (name == "max-dag-transitions")
+        options.dag.max_transitions = positive(value);
+      else if (name == "dag-search") {
+        if (value != "exact" && value != "resolved")
+          throw std::invalid_argument("dag-search must be exact or resolved");
+        options.dag.mode = value == "resolved" ? DagSearchMode::Resolved
+                                               : DagSearchMode::Exact;
+      } else if (name == "max-chain-transitions")
+        options.max_chain_transitions = positive(value);
+      else if (name == "chain-search") {
+        if (value != "exact" && value != "resolved")
+          throw std::invalid_argument("chain-search must be exact or resolved");
+        options.chain_resolved = value == "resolved";
+      } else if (name == "compose-pruned")
         options.compose_pruned = true;
       else if (name == "max-pair-evaluations")
         options.max_pair_evaluations = positive(value);
@@ -185,7 +221,15 @@ int main(int argc, char** argv) {
     if (!module) return 1;
     ArtifactWriter artifacts(dump_directory);
     auto report = summarizeRegions(*module, options, artifacts.observer());
-    llvm::outs() << formatReport(report);
+    if (report.dag) {
+      llvm::outs() << report.dag->selected().lowered_mlir << '\n';
+      llvm::errs() << formatReport(report);
+    } else if (report.chain) {
+      llvm::outs() << report.chain->selected().lowered_mlir << '\n';
+      llvm::errs() << formatReport(report);
+    } else {
+      llvm::outs() << formatReport(report);
+    }
   } catch (const std::exception& error) {
     llvm::errs() << error.what() << '\n';
     return 1;

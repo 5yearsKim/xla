@@ -31,6 +31,8 @@ cc_library(
     hdrs = ["pair_composer.h"],
     deps = [
         ":region_summary",
+        ":resolved_plan",
+        ":execution_plan",
         "//research/joint_shard/sharding:plan_materializer",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -42,6 +44,8 @@ cc_library(
     srcs = ["region_optimizer.cc"],
     hdrs = ["region_optimizer.h"],
     deps = [
+        ":chain_optimizer",
+        ":dag_optimizer",
         ":optimization_observer",
         ":pair_composer",
         "//research/joint_shard/bridge:stablehlo_importer",
@@ -74,4 +78,36 @@ cc_library(
     deps = [
         "@llvm-project//mlir:IR",
     ],
+)
+
+cc_library(
+    name = "resolved_plan",
+    srcs = ["resolved_plan.cc"],
+    hdrs = ["resolved_plan.h"],
+    deps = [":region_summary"],
+)
+
+cc_library(
+    name = "execution_plan",
+    srcs = ["execution_plan.cc"],
+    hdrs = ["execution_plan.h"],
+    deps = [
+        ":resolved_plan",
+        "//research/joint_shard/sharding:plan_materializer",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_library(
+    name = "chain_optimizer",
+    srcs = ["chain_optimizer.cc"],
+    hdrs = ["chain_optimizer.h"],
+    deps = [":execution_plan"],
+)
+
+cc_library(
+    name = "dag_optimizer",
+    srcs = ["dag_optimizer.cc"],
+    hdrs = ["dag_optimizer.h"],
+    deps = [":chain_optimizer"],
 )

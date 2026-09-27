@@ -6,14 +6,15 @@
 split → saturate once → bounded candidates → candidate × boundary Shardy runs
       → preserved exact table + directed reshard-dominance frontier
       → optional pair search → verified combined MLIR per external boundary
+      → optional chain/DAG DP → one verified implementation under a fixed contract
 ```
 
 The input module is never rewritten by this command. Each candidate is exported
 as a standalone `@main` function and evaluated on fresh clones. The result is a
 complete boundary table and frontier for each region. Optional two-region
 composition selects and materializes one implementation per external boundary.
-The command does not select a whole-program implementation or emit a device
-executable.
+Chain mode selects a complete implementation of a supported linear function.
+The emitted collective IR is not a device executable.
 
 ## Run the prototype
 
@@ -52,6 +53,10 @@ explicit numerical policy.
 | `search/region_interface` | Stable SSA value IDs and typed region/pair port mappings |
 | `search/region_summary` | Preserved best-per-boundary table, frontier IDs and dominance witnesses |
 | `search/pair_composer` | Joint pair search, dominance resolution and materialization orchestration |
+| `search/resolved_plan` | Shared exact-boundary resolution through the retained frontier |
+| `search/execution_plan` | Stable arena references to region, adapter and composite nodes |
+| `search/chain_optimizer` | Prefix dynamic programming, greedy comparison and reconstruction |
+| `search/dag_optimizer` | Live-value layout DP for residuals, fan-out and joins in source order |
 | `sharding/plan_materializer` | Mesh-checked inlining of lowered artifacts and cost verification |
 | `search/region_optimizer` | Orchestration, structured results and synchronous observers |
 | `reporting/reports` | Human-readable report formatting |
@@ -323,8 +328,224 @@ The tests also include a synthetic example where greedy child selection costs
 all nine canonical adapter directions, resolved-frontier cost preservation,
 shared input identity/layout checks and multiple-output materialization.
 
-This version does not apply a whole-program winner, merge or re-saturate region
+This version does not mutate the source function, merge or re-saturate region
 seams, cluster candidates, infer tensor roles, or do sharding-aware e-graph
 extraction. Its results are relative to the sampled candidates/layouts, Shardy
-propagation and the configured illustrative cost model. Multi-region dynamic
-programming and device execution remain future milestones.
+propagation and the configured illustrative cost model. Device execution,
+region scheduling and control flow remain future milestones.
+
+## Optimize a complete linear chain
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/chain_5.mlir \
+  --optimize-chain --numerical-policy=relaxed --dump-dir=/tmp/joint_chain \
+  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+```
+
+This mode requires exactly one function, a nonempty single-block `@main`, whose
+operations are completely covered by regions. Each non-final region has one
+output consumed only by the immediate next region. Additional inputs must be
+function arguments. The final region may have multiple outputs; return ordering
+and repeated returns follow the source signature. Unsupported/fixed operations,
+fan-out across regions, residual edges, early live-outs and partial function
+coverage are rejected with an explanation. Multiple uses inside the next region
+are allowed. Shared and unused function arguments retain their signature slots.
+
+The external contract is chosen before candidate/boundary evaluation. Fixed
+annotations are preserved as exact execution layouts. Open annotations are
+closed while retaining their existing axes and replication restrictions; no new
+axes are added. Unconstrained ports use replication. Repeated return values
+must have consistent exact contracts. Native combined and sub-axis layouts
+remain available through existing layout validation. Region port layout policies
+continue to control internal boundary choices; they do not override this function
+contract. External ports are fixed before Cartesian enumeration, so a boundary
+cap cannot filter out a required contract merely because it appears late.
+
+For each outgoing layout, DP retains the cheapest prefix under:
+
+```text
+prefix cost + directed seam adapter cost + next resolved region cost
+```
+
+All other region inputs must match the fixed function argument layouts. With one
+live intermediate per cut, the outgoing layout is sufficient to describe the
+future cost; earlier choices need not remain separate search states. Ties compare
+the sequence of requested local plan IDs. Predecessors recover the complete
+winning path. `--max-chain-transitions=N` bounds transitions **per layer**; a
+truncated layer still supplies its retained prefixes to subsequent layers. If no
+complete feasible prefix remains, the command fails rather than emitting a
+partial implementation. A capped result may miss the global sampled-table
+minimum; every layer cap, candidate profile skip, boundary cap, saturation limit
+and DAG extraction limit is reported.
+
+The command compares four modes with the same contract, mesh, cost model,
+candidate/boundary evaluation set and per-layer transition cap:
+
+| Mode | Implementations | Selection |
+|---|---|---|
+| Original + DP | Original source expression only | Cheapest complete chain |
+| Joint greedy | Best rewrite per exact boundary | Cheapest next step including its incoming adapter |
+| Joint exact DP | Best rewrite per exact boundary | Cheapest complete chain |
+| Joint resolved DP | Retained implementations with exact-boundary wrappers | Cheapest complete chain |
+
+The original-only table is retained during evaluation even when a rewrite wins
+at the same boundary, so the baseline does not accidentally use rewritten plans.
+`--chain-search=exact|resolved` chooses the emitted winner (default exact).
+Resolved mode uses the same callable exact boundaries; it can improve their
+implementations with input/output adapters. As in pair composition, its uncapped
+cost is no greater than the uncapped exact reference, not necessarily equal.
+It is not yet a reduction of the exact search space.
+
+Execution plans form an arena of region references, executable adapters and
+ordered composites that can reference earlier prefix composites. Each node has
+stable value IDs, a typed interface, exact boundary and component cost. Region
+references contain both the summary index and its local implementation ID.
+Composite costs sum direct children; wrappers and seam adapters are each charged
+once. Composites have local value bindings so adapting a shared function argument
+for one region does not alter the argument supplied to another region.
+
+Only the selected chain is materialized by the CLI. It inlines the chosen
+collective artifacts and all nonidentity adapters into one `@main` without
+rerunning propagation. MLIR verification, input/output layout checks and
+recomputed compute/communication costs remain mandatory. The reconstructed plan
+cost must also agree with the selected prefix cost. Chain mode sends MLIR to
+stdout and reports to stderr; `--dump-dir` additionally writes `selected.mlir`,
+`selected_plan.txt`, and `comparison.txt`, plus existing region diagnostics.
+Library search remains free of file writes. Original baseline execution nodes
+refer to `OptimizationReport.original_regions`; joint modes refer to `regions`.
+
+### Numerical validation policy
+
+`chain_optimization_test` covers three, four and five regions, independent
+Cartesian enumeration, real and synthetic greedy failures, shared argument and
+return ordering, emitted adapter operation counts, component costs, capped
+search, exact/resolved selection and strict rewriting. Numerical tests compare
+both selected candidate expressions before collective lowering and the emitted
+collective module with the source computation.
+
+The test-only CPU simulator stores device shards in global coordinates and
+executes gathers, slices, all-to-all, canonical permutations, sum all-reduce and
+sum reduce-scatter between simulated devices. It supports the fixture's f32
+scalar broadcasts, ordinary rank-2 dots, add/multiply and tanh; unsupported
+operators/sub-axes fail explicitly. Tests also execute every canonical adapter
+direction and a contracting dot requiring all-reduce. Removing that all-reduce
+causes the simulation to fail. Collectives are never stripped or treated as
+universal identity operations.
+
+For the bounded f32 fixtures, the policy is seed 42, scalar scale 0.3, five
+samples with other input elements uniformly drawn from [-0.5, 0.5], and an
+alternating-sign cancellation sample. Comparisons require finite outputs and
+`abs(actual-reference) <= 2e-5 + 2e-4 * abs(reference)`. Strict rewrite tests use
+the same numerical tolerance: distributed reductions may still change the
+accumulation order. These are regression checks for supported fixtures, not a
+proof for arbitrary floating-point inputs. The CLI does not execute arbitrary
+input modules or measure hardware runtime.
+
+## Optimize residuals and branches
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/residual_block.mlir \
+  --optimize-dag --dag-search=exact --dump-dir=/tmp/joint_dag \
+  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+```
+
+DAG mode supports residual connections, fan-out, joins, independent branches,
+multiple region outputs, early returns, repeated operands and repeated returns.
+It requires one nonempty single-block `@main` with complete region coverage and
+supported static tensor types. It preserves source region order; it does not
+schedule branches, handle control flow, or keep several persistent converted
+copies of a value. Pair composition, chain optimization and DAG optimization
+are mutually exclusive.
+
+### Live values and the fixed contract
+
+Stable value IDs identify each function argument and region output. The
+interface records its unique producer, distinct consuming regions, and last
+use. Function return is treated as one final use, so early-returned values stay
+live until the function ends. After each region, the live cut contains produced
+values used by later regions or the return, sorted by value ID. Function
+arguments are always available under their fixed external layouts and do not
+add search dimensions. Duplicate uses in a region share one input port.
+
+The external layout contract follows the same annotation rules as chain mode.
+Function argument constraints fix requested region input layouts. Function
+result constraints fix the produced output layout of the corresponding region.
+An early-returned tensor can still be converted for another consumer: its
+producer layout remains pinned, while that consumer's input layout is searched.
+Repeated returns must agree on their layout; a returned function argument must
+have matching argument/result contracts. Unused arguments keep their slots.
+
+### Search and reconstruction
+
+A prefix state assigns one persistent producer layout to every live value.
+Each transition chooses a region implementation and adds:
+
+```text
+prefix cost
++ sum(adapter from each input's persistent layout to its requested layout)
++ resolved region implementation cost (including its wrappers)
+```
+
+The region's outputs introduce new persistent layouts. Input adapters create
+consumer-local copies and never update the persistent layout map. Once a value
+has no remaining use it leaves the state. The cheapest prefix per complete live
+layout assignment survives, with requested plan-ID sequences breaking ties.
+Predecessors recover all selected regions and adapters. Exact search is globally
+optimal over the supplied tables under this fixed-order, additive-cost model
+when search caps do not truncate it. Conversion sharing, cached copies, peak
+memory costs, branch scheduling and cross-region rewrites are outside this
+model.
+
+`--max-live-values=4` rejects a wider cut before evaluating candidates. It never
+silently drops a live value. `--max-dag-states=4096` caps retained states per
+layer; excess states are deterministically discarded in cost/tie order.
+`--max-dag-transitions=65536` caps attempted transitions per region. Both caps
+mark the result truncated, report the affected layers, and continue searching
+for a complete plan. If no complete feasible plan survives, the command fails
+without emitting selected MLIR. A truncated result is the best complete plan
+found by that search, without a guarantee of the sampled-table minimum.
+
+Original-only DP, joint greedy, joint exact DP, and joint resolved DP share the
+contract, region evaluation, mesh and configured budgets. Greedy retains only
+its cheapest next prefix. `--dag-search=exact|resolved` chooses the emitted
+winner. Resolved search uses retained implementations with executable wrappers
+at the same requested boundaries; without truncation its optimum cannot exceed
+the exact-table optimum. It does not reduce the boundary search space.
+
+Reconstruction reuses the execution-plan arena and existing materializer. Each
+consumer composite encloses its adapters and chosen region; it exposes only
+produced outputs. Prefix composites expose the whole live cut and reference
+earlier prefixes once. This retains a residual's original value while its
+consumer receives an adapted copy, and emits every producer and adapter once.
+The final composite restores function return order, including repeated outputs
+and pass-through arguments. Selected MLIR must verify, match the exact external
+layouts, and agree with both reconstructed and recomputed component costs.
+
+Stdout contains selected MLIR and stderr contains the explanation. With
+`--dump-dir`, `selected.mlir`, `selected_plan.txt`, and `comparison.txt` include
+selected implementations, wrapper costs, each input adapter, live-value layouts,
+search times, transitions, retained/discarded states, peak live cut width, and
+all budget truncation indicators. The report distinguishes capped search from
+an uncapped optimum. Library search does not write files.
+
+### DAG regression policy
+
+`dag_optimization_test` independently enumerates complete combinations for the
+residual, fan-out/join, independent-branch, and multiple-output fixtures. It
+checks chain/DAG agreement on the three-to-five-region fixtures, greedy failure,
+all search caps, invalid coverage, unknown costs, strict/resolved selection,
+annotated external contracts, and artifact emission. A forced fan-out case
+requires a conversion for one consumer and the original layout for another;
+its emitted collectives, numerical results, operation counts and costs are
+checked. Leaf operation counts also detect duplicated producers or omitted
+adapters.
+
+The tests execute selected candidate expressions before lowering and simulate
+emitted collective modules against the source. They use the chain fixture CPU
+simulator and the same explicit f32 policy: seed 42, five samples bounded by
+[-0.5, 0.5], one alternating-sign cancellation sample, scalar scale 0.3, and
+`atol=2e-5, rtol=2e-4`. Fixture simulation establishes regression coverage for
+these operations and inputs; the CLI itself does not run arbitrary modules or
+measure hardware performance. See [DAG_EXPERIMENT.md](DAG_EXPERIMENT.md).

@@ -1,7 +1,15 @@
 filegroup(
     name = "samples",
     srcs = [
+        "residual_block.mlir",
+        "fanout_join.mlir",
+        "independent_branches.mlir",
+        "dag_multi_output.mlir",
+
         "add_mul.mlir",
+        "chain_3.mlir",
+        "chain_4.mlir",
+        "chain_5.mlir",
         "dot_contracting.mlir",
         "dot_gather.mlir",
         "dot_general.mlir",

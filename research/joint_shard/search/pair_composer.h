@@ -5,22 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "research/joint_shard/search/region_summary.h"
+#include "research/joint_shard/search/resolved_plan.h"
 
 namespace joint_shard {
 
-using ReshardPlanner = std::function<ReshardPlan(
-    const TensorSharding&, const TensorSharding&, mlir::Type)>;
-struct ResolvedRegionPlan {
-  PlanId requested = 0, implementation = 0;
-  size_t candidate_id = 0;
-  BoundaryState boundary;
-  Cost core_cost, adapters_cost, cost;
-  std::vector<ReshardPlan> input_adapters, output_adapters;
-};
-ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
-                                     PlanId requested, bool use_frontier,
-                                     const ReshardPlanner& oracle);
 struct ComposedPlan {
   BoundaryState boundary;
   ResolvedRegionPlan a, b;

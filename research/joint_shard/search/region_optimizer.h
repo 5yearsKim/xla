@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "eggc/runner.hpp"
+#include "research/joint_shard/search/chain_optimizer.h"
+#include "research/joint_shard/search/dag_optimizer.h"
 #include "research/joint_shard/search/optimization_observer.h"
 #include "research/joint_shard/search/pair_composer.h"
 #include "research/joint_shard/sharding/boundary_state.h"
@@ -25,6 +27,11 @@ struct RegionOptimizerOptions {
   std::optional<std::pair<size_t, size_t>> compose_regions;
   size_t max_pair_evaluations = 65536;
   bool compose_pruned = false;
+  bool optimize_chain = false;
+  bool chain_resolved = false;
+  size_t max_chain_transitions = 65536;
+  bool optimize_dag = false;
+  DagSearchOptions dag;
   size_t max_candidates = 32;
   size_t max_boundary_states = 256;
   std::string mesh_name;
@@ -32,7 +39,11 @@ struct RegionOptimizerOptions {
 struct OptimizationReport {
   MeshContext mesh;
   std::vector<RegionSummary> regions;
+  // Original-only implementations retained for function baseline references.
+  std::vector<RegionSummary> original_regions;
   std::vector<PairSummary> compositions;
+  std::optional<ChainExperiment> chain;
+  std::optional<DagExperiment> dag;
   std::map<std::string, size_t> preserved_operations;
   std::vector<eggc::RunReport> saturation;
 };

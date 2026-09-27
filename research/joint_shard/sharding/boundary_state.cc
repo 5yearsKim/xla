@@ -175,10 +175,10 @@ std::vector<TensorSharding> tensorLayoutChoices(
   return choices;
 }
 
-BoundaryEnumeration enumerateBoundaryStates(const Region& region,
-                                            const MeshContext& mesh,
-                                            const LayoutPolicy& policy,
-                                            size_t max_states) {
+BoundaryEnumeration enumerateBoundaryStates(
+    const Region& region, const MeshContext& mesh, const LayoutPolicy& policy,
+    size_t max_states, const std::map<void*, TensorSharding>& fixed_inputs,
+    const std::map<void*, TensorSharding>& fixed_outputs) {
   if (!max_states) throw std::invalid_argument("boundary cap must be positive");
   std::vector<std::vector<TensorSharding>> ports;
   auto choices = [&](mlir::Value value, size_t index, bool input) {
@@ -204,6 +204,15 @@ BoundaryEnumeration enumerateBoundaryStates(const Region& region,
     }
     const auto& overrides = input ? policy.inputs : policy.outputs;
     auto found = overrides.find(index);
+    const auto& fixed = input ? fixed_inputs : fixed_outputs;
+    if (auto exact = fixed.find(value.getAsOpaquePointer());
+        exact != fixed.end()) {
+      for (auto constraint : constraints)
+        if (!compatible(exact->second.attr, constraint, mesh))
+          throw std::invalid_argument(
+              "function contract conflicts with region constraint");
+      return std::vector<TensorSharding>{exact->second};
+    }
     return tensorLayoutChoices(
         llvm::cast<mlir::RankedTensorType>(value.getType()), mesh, policy,
         found == overrides.end() ? policy.defaults : found->second,
@@ -242,6 +251,36 @@ BoundaryEnumeration enumerateBoundaryStates(const Region& region,
     }
   };
   visit(0);
+  return result;
+}
+
+BoundaryState functionLayoutContract(mlir::func::FuncOp function,
+                                     const MeshContext& mesh) {
+  BoundaryState result;
+  auto choose = [&](mlir::Type type, mlir::sdy::TensorShardingAttr annotation) {
+    auto tensor = llvm::dyn_cast<mlir::RankedTensorType>(type);
+    if (!tensor || !tensor.hasStaticShape())
+      throw std::invalid_argument(
+          "function contract requires static ranked tensor ports");
+    TensorSharding layout =
+        annotation ? TensorSharding{closeSharding(annotation, mesh)}
+                   : replicatedSharding(tensor, mesh);
+    if (!validExactSharding(layout, tensor, mesh) ||
+        (annotation && !compatible(layout.attr, annotation, mesh)))
+      throw std::invalid_argument(
+          "no compatible exact function layout contract");
+    return layout;
+  };
+  for (size_t i = 0; i < function.getNumArguments(); ++i)
+    result.inputs.push_back(
+        choose(function.getArgument(i).getType(),
+               function.getArgAttrOfType<mlir::sdy::TensorShardingAttr>(
+                   i, "sdy.sharding")));
+  for (size_t i = 0; i < function.getNumResults(); ++i)
+    result.outputs.push_back(
+        choose(function.getResultTypes()[i],
+               function.getResultAttrOfType<mlir::sdy::TensorShardingAttr>(
+                   i, "sdy.sharding")));
   return result;
 }
 

@@ -28,9 +28,13 @@ Candidate mergeExtractedRoots(const std::vector<TensorRecExpr>& roots,
                               std::string name);
 // Bounded profile extraction. The cap includes the original; fewer unique
 // expressions are expected. Saturation is not repeated for different profiles.
-std::vector<Candidate> extractCandidates(const SaturatedRegion& saturated,
-                                         const TensorRewriteOptions& options,
-                                         size_t max_candidates = 32);
+struct CandidateExtractionReport {
+  bool profiles_skipped_at_cap = false;
+  std::vector<TensorExtractionReport> profiles;
+};
+std::vector<Candidate> extractCandidates(
+    const SaturatedRegion& saturated, const TensorRewriteOptions& options,
+    size_t max_candidates = 32, CandidateExtractionReport* report = nullptr);
 
 }  // namespace joint_shard
 

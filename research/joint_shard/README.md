@@ -119,6 +119,49 @@ to search and emit verified combined modules for an adjacent pair; see the
 [composition guide](REGION_OPTIMIZER.md#compose-two-regions). Candidate count
 defaults to a cap of 32, with at most five distinct profile candidates in this milestone.
 
+Add `--optimize-chain` to automatically select a complete implementation of a
+supported function under one fixed external layout contract. Existing function
+annotations are honored; open dimensions are closed without adding axes, and
+unconstrained arguments/results are replicated. Function argument and return
+order are preserved, including shared/unused arguments and repeated returns.
+The first version requires one single-block `@main`, complete region coverage,
+and one intermediate tensor between each pair of neighboring regions.
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/chain_3.mlir \
+  --optimize-chain --dump-dir=/tmp/joint_chain \
+  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+```
+
+Chain mode emits verified selected MLIR to stdout and the explanation to stderr.
+The dump directory also contains `selected.mlir`, `selected_plan.txt`, and a
+compact `comparison.txt` covering original-only DP, joint greedy, exact DP and
+dominance-resolved DP. `--chain-search=resolved` selects the latter; exact search
+is the default reference. `--max-chain-transitions=65536` limits each DP layer
+and reports truncation. See [REGION_OPTIMIZER.md](REGION_OPTIMIZER.md#optimize-a-complete-linear-chain)
+and the recorded [chain experiment](CHAIN_EXPERIMENT.md).
+
+Use `--optimize-dag` for residual connections, fan-out, joins, independent
+branches, and multiple region outputs. It retains a layout for every live
+produced tensor while processing regions in their original order. Each consumer
+gets its own adapters; later consumers retain access to the producer's original
+value and layout. Function arguments use the same fixed external contract.
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/residual_block.mlir \
+  --optimize-dag --dump-dir=/tmp/joint_dag \
+  > /tmp/selected.mlir 2> /tmp/selection_report.txt
+```
+
+This emits one verified `@main` and the same three selection artifacts as chain
+mode. `--dag-search=resolved` selects dominance-resolved implementations;
+exact search is the default. `--max-live-values=4` rejects wider live cuts.
+`--max-dag-states=4096` and `--max-dag-transitions=65536` bound each search
+layer and report truncation. See the [DAG search model](REGION_OPTIMIZER.md#optimize-residuals-and-branches)
+and the recorded [DAG experiment](DAG_EXPERIMENT.md).
+
 ```sh
 bazel-bin/research/joint_shard/tools/summarize_regions \
   research/joint_shard/testdata/scaling_dot.mlir \

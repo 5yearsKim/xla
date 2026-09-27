@@ -105,21 +105,26 @@ Candidate mergeExtractedRoots(const std::vector<TensorRecExpr>& roots,
   return candidate;
 }
 
-std::vector<Candidate> extractCandidates(const SaturatedRegion& saturated,
-                                         const TensorRewriteOptions& options,
-                                         size_t max_candidates) {
+std::vector<Candidate> extractCandidates(
+    const SaturatedRegion& saturated, const TensorRewriteOptions& options,
+    size_t max_candidates, CandidateExtractionReport* diagnostics) {
   if (!max_candidates)
     throw std::invalid_argument("candidate cap must be positive");
   std::vector<Candidate> candidates{saturated.original};
+  if (diagnostics) *diagnostics = {};
   std::vector<Candidate> identities{canonicalize(saturated.original)};
   auto append = [&](ExtractionProfile profile, TensorExtractorMode mode,
                     std::string name) {
-    if (candidates.size() >= max_candidates) return;
+    if (candidates.size() >= max_candidates) {
+      if (diagnostics) diagnostics->profiles_skipped_at_cap = true;
+      return;
+    }
     TensorExtractionReport report;
     auto candidate = mergeExtractedRoots(
         extractTensorRoots(*saturated.graph, saturated.roots, profile, mode,
                            options.dag, report),
         std::move(name));
+    if (diagnostics) diagnostics->profiles.push_back(report);
     auto identity = canonicalize(candidate);
     for (const auto& previous : identities)
       if (previous.output_roots == identity.output_roots &&

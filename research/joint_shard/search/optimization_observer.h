@@ -8,6 +8,8 @@ namespace joint_shard {
 struct ShardySnapshot;
 struct RegionSummary;
 struct PairSummary;
+struct ChainExperiment;
+struct DagExperiment;
 // Callbacks are synchronous; MLIR and summary references are borrowed for the
 // call. Providing a snapshot callback enables all intermediate stages.
 struct OptimizationObserver {
@@ -15,6 +17,8 @@ struct OptimizationObserver {
   std::function<void(size_t, size_t, size_t, const ShardySnapshot&)> snapshot;
   std::function<void(const RegionSummary&)> region_completed;
   std::function<void(const PairSummary&)> pair_completed;
+  std::function<void(const ChainExperiment&)> chain_completed;
+  std::function<void(const DagExperiment&)> dag_completed;
 };
 }  // namespace joint_shard
 #endif
