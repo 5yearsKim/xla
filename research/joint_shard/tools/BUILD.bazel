@@ -1,10 +1,22 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "rewrite_cli_options",
+    srcs = ["rewrite_cli_options.cc"],
+    hdrs = ["rewrite_cli_options.h"],
+    deps = [
+        "//research/joint_shard/transforms:rewrite_options",
+        "@cxxopts//:cxxopts",
+    ],
+)
 
 cc_binary(
     name = "run_shardy",
     srcs = ["run_shardy.cc"],
     data = ["//research/joint_shard/testdata:samples"],
     deps = [
+        "@cxxopts//:cxxopts",
         "//research/joint_shard/sharding:shardy_runner",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -18,6 +30,8 @@ cc_binary(
     name = "parse_stablehlo",
     srcs = ["parse_stablehlo.cc"],
     deps = [
+        ":rewrite_cli_options",
+        "@cxxopts//:cxxopts",
         "//research/joint_shard/transforms:rewrite_regions",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -32,6 +46,8 @@ cc_binary(
     srcs = ["summarize_regions.cc"],
     data = ["//research/joint_shard/testdata:samples"],
     deps = [
+        ":rewrite_cli_options",
+        "@cxxopts//:cxxopts",
         "//research/joint_shard/search:region_optimizer",
         "//research/joint_shard/transforms:rewrite_options",
         "@llvm-project//llvm:Support",

@@ -49,6 +49,12 @@ bazel-bin/research/joint_shard/tools/run_shardy \
   --dump-dir=/tmp/joint_shard
 ```
 
+The tools accept options before or after the input path and provide `--help`.
+For example, `run_shardy --stop-after propagation input.mlir` is equivalent to
+placing the input path first. `parse_stablehlo` also supports
+`--rewrite-report`; rewrite controls shared with `summarize_regions` are listed
+in each tool's generated help.
+
 Inputs provide their own `sdy.mesh` definitions and sharding annotations. The
 runner preserves them instead of generating boundary layouts. All non-maximal,
 non-empty meshes must have the same device count; `mhlo.num_partitions`, when

@@ -6,7 +6,9 @@
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Parser/Parser.h"
+#include "cxxopts.hpp"
 #include "research/joint_shard/search/region_optimizer.h"
+#include "research/joint_shard/tools/rewrite_cli_options.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 
@@ -39,35 +41,71 @@ double number(std::string_view text) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    llvm::errs()
-        << "Usage: summarize_regions <file.mlir> [--mesh=name] "
-           "[--max-region-ops=128] [--max-candidates=32] "
-           "[--max-boundary-states=256] [--compose-regions=0,1] "
-           "[--compose-pruned] [--max-pair-evaluations=65536] "
-           "[--data-axis=data] [--model-axis=model] [--data-dim=0|none] "
-           "[--model-dim=-1|none] [--input-policy=PORT:DATA_DIM:MODEL_DIM] "
-           "[--output-policy=PORT:DATA_DIM:MODEL_DIM] [--rule-blocker=op|none] "
-           "[--compute-work-per-us=1000000] [--bandwidth-bytes-per-us=50000] "
-           "[--collective-latency-us=5] [--dump-dir=path] "
-        << tensorRewriteOptionHelp()
-        << "\nDefault numerical policy: relaxed.\n";
-    return 1;
-  }
   try {
+    cxxopts::Options cli("summarize_regions",
+                         "Search bounded sharding plans for MLIR regions.");
+    cli.positional_help("<file.mlir>");
+    cli.custom_help("<file.mlir> [options]");
+    cli.add_options()("input", "Input MLIR file",
+                      cxxopts::value<std::string>())(
+        "h,help", "Show this help")("mesh", "Mesh name to use",
+                                    cxxopts::value<std::string>())(
+        "max-region-ops", "Maximum operations per region",
+        cxxopts::value<std::string>())("max-candidates",
+                                       "Maximum candidates per region",
+                                       cxxopts::value<std::string>())(
+        "max-boundary-states", "Maximum boundary states",
+        cxxopts::value<std::string>())("compose-regions",
+                                       "Compose adjacent region indices A,B",
+                                       cxxopts::value<std::string>())(
+        "compose-pruned", "Include candidates removed by pruning")(
+        "max-pair-evaluations", "Maximum pair evaluations",
+        cxxopts::value<std::string>())("data-axis",
+                                       "Mesh axis for data parallelism",
+                                       cxxopts::value<std::string>())(
+        "model-axis", "Mesh axis for model parallelism",
+        cxxopts::value<std::string>())(
+        "data-dim", "Default tensor dimension for data axis, or none",
+        cxxopts::value<std::string>())(
+        "model-dim", "Default tensor dimension for model axis, or none",
+        cxxopts::value<std::string>())(
+        "input-policy", "Input port policy PORT:DATA_DIM:MODEL_DIM",
+        cxxopts::value<std::string>())(
+        "output-policy", "Output port policy PORT:DATA_DIM:MODEL_DIM",
+        cxxopts::value<std::string>())("rule-blocker",
+                                       "Rule blocker operation name, or none",
+                                       cxxopts::value<std::string>())(
+        "compute-work-per-us", "Compute work per microsecond",
+        cxxopts::value<std::string>())("bandwidth-bytes-per-us",
+                                       "Bandwidth in bytes per microsecond",
+                                       cxxopts::value<std::string>())(
+        "collective-latency-us", "Collective latency in microseconds",
+        cxxopts::value<std::string>())(
+        "dump-dir", "Write intermediate IR to this directory",
+        cxxopts::value<std::string>());
+    cli.parse_positional({"input"});
+    addRewriteCliOptions(cli);
+    const cxxopts::ParseResult parsed = cli.parse(argc, argv);
+    if (parsed.count("help")) {
+      llvm::outs() << cli.help() << '\n';
+      return 0;
+    }
+    if (!parsed.count("input") || !parsed.unmatched().empty()) {
+      llvm::errs() << cli.help() << '\n';
+      return 1;
+    }
+
     RegionOptimizerOptions options;
-    for (int i = 2; i < argc; ++i) {
-      std::string_view argument(argv[i]);
-      if (parseTensorRewriteOption(argument, options.rewriting)) continue;
-      auto at = argument.find('=');
-      auto name = argument.substr(0, at);
-      auto value = at == std::string_view::npos ? std::string_view{}
-                                                : argument.substr(at + 1);
-      if (name == "--compose-pruned")
+    for (const cxxopts::KeyValue& argument : parsed.arguments()) {
+      const std::string& name = argument.key();
+      const std::string& value = argument.value();
+      if (name == "input") continue;
+      if (applyRewriteCliOption(name, value, options.rewriting)) continue;
+      if (name == "compose-pruned")
         options.compose_pruned = true;
-      else if (name == "--max-pair-evaluations")
+      else if (name == "max-pair-evaluations")
         options.max_pair_evaluations = positive(value);
-      else if (name == "--compose-regions") {
+      else if (name == "compose-regions") {
         auto comma = value.find(',');
         if (comma == std::string_view::npos)
           throw std::invalid_argument("expected A,B region indices");
@@ -81,32 +119,32 @@ int main(int argc, char** argv) {
         };
         options.compose_regions = {
             {index(value.substr(0, comma)), index(value.substr(comma + 1))}};
-      } else if (name == "--max-region-ops")
+      } else if (name == "max-region-ops")
         options.regionizer.max_region_ops = positive(value);
-      else if (name == "--max-candidates")
+      else if (name == "max-candidates")
         options.max_candidates = positive(value);
-      else if (name == "--max-boundary-states")
+      else if (name == "max-boundary-states")
         options.max_boundary_states = positive(value);
-      else if (name == "--mesh")
+      else if (name == "mesh")
         options.mesh_name = value;
-      else if (name == "--dump-dir")
+      else if (name == "dump-dir")
         options.dump_directory = value;
-      else if (name == "--data-axis")
+      else if (name == "data-axis")
         options.layouts.data_axis = value;
-      else if (name == "--model-axis")
+      else if (name == "model-axis")
         options.layouts.model_axis = value;
-      else if (name == "--data-dim")
+      else if (name == "data-dim")
         options.layouts.defaults.data_dimension = dimension(value);
-      else if (name == "--model-dim")
+      else if (name == "model-dim")
         options.layouts.defaults.model_dimension = dimension(value);
-      else if (name == "--rule-blocker") {
+      else if (name == "rule-blocker") {
         if (value == "none")
           options.regionizer.rule_blockers.clear();
         else if (!value.empty())
           options.regionizer.rule_blockers.emplace_back(value);
         else
           throw std::invalid_argument("empty rule blocker");
-      } else if (name == "--input-policy" || name == "--output-policy") {
+      } else if (name == "input-policy" || name == "output-policy") {
         auto first = value.find(':'), last = value.rfind(':');
         if (first == std::string_view::npos || first == last)
           throw std::invalid_argument(
@@ -119,22 +157,23 @@ int main(int argc, char** argv) {
         DimensionPolicy policy{
             dimension(value.substr(first + 1, last - first - 1)),
             dimension(value.substr(last + 1))};
-        (name == "--input-policy" ? options.layouts.inputs
-                                  : options.layouts.outputs)[port] = policy;
-      } else if (name == "--compute-work-per-us")
+        (name == "input-policy" ? options.layouts.inputs
+                                : options.layouts.outputs)[port] = policy;
+      } else if (name == "compute-work-per-us")
         options.cost.compute_work_per_us = number(value);
-      else if (name == "--bandwidth-bytes-per-us")
+      else if (name == "bandwidth-bytes-per-us")
         options.cost.bandwidth_bytes_per_us = number(value);
-      else if (name == "--collective-latency-us")
+      else if (name == "collective-latency-us")
         options.cost.collective_latency_us = number(value);
       else
-        throw std::invalid_argument("unknown option: " + std::string(argument));
+        throw std::invalid_argument("unknown option: --" + name);
     }
     mlir::DialectRegistry registry;
     mlir::stablehlo::registerAllDialects(registry);
     mlir::sdy::registerAllDialects(registry);
     mlir::MLIRContext context(registry);
-    auto module = mlir::parseSourceFile<mlir::ModuleOp>(argv[1], &context);
+    auto module = mlir::parseSourceFile<mlir::ModuleOp>(
+        parsed["input"].as<std::string>(), &context);
     if (!module) return 1;
     auto report = summarizeRegions(*module, options);
     llvm::outs() << report.str();
