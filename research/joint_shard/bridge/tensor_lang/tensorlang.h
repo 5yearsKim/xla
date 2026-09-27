@@ -155,6 +155,9 @@ using OpAttrs =
 // MLIR handles in attributes are context-owned. Keep the context alive through
 // graph use/export. No descriptor table or encoded operator strings are needed.
 struct TensorNode {
+  // matches() compares the complete non-child identity, so egg-c may use its
+  // memo table when every variable in a subpattern is already bound.
+  static constexpr bool exact_matches = true;
   OpKind op;
   OpAttrs attrs;
   std::vector<eggc::Id> operands;

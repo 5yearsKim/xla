@@ -10,8 +10,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "eggc/runner.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
+#include "research/joint_shard/transforms/tensor_extraction.h"
 
-enum class ExtractionProfile { Compute, Depth, Memory };
 struct TensorRewriteOptions {
   std::string rules_file;  // Empty uses the embedded tensor.rules.
   NumericalPolicy numerical_policy = NumericalPolicy::PreserveEvaluation;
@@ -24,6 +24,14 @@ struct TensorRewriteOptions {
   }();
   SemanticRuleOptions semantic;
   ExtractionProfile extraction = ExtractionProfile::Compute;
+  TensorExtractorMode extractor = TensorExtractorMode::Auto;
+  eggc::DagOptions dag = [] {
+    eggc::DagOptions limits;
+    limits.state_limit = 10000;
+    limits.time_limit = std::chrono::milliseconds(50);
+    limits.frontier_limit = 1000;
+    return limits;
+  }();
 };
 struct TensorRewriteReport {
   std::size_t regions = 0;
@@ -32,6 +40,7 @@ struct TensorRewriteReport {
   std::map<std::string, std::size_t> boundaries;
   std::map<std::string, SemanticRuleStats> rules;
   std::vector<eggc::RunReport> runs;
+  std::vector<TensorExtractionReport> extractions;
   std::string str() const;
 };
 // Supported contiguous islands use one graph and one export cache per island.

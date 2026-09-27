@@ -37,6 +37,9 @@ TEST_F(RewritePipelineTest, MultipleOutputsKeepSharedProducer) {
       mlir::succeeded(rewriteUnconstrainedRegions(*module, {}, &report)));
   EXPECT_EQ(report.regions, 1);
   EXPECT_EQ(report.roots, 2);
+  ASSERT_EQ(report.extractions.size(), 1);
+  EXPECT_FALSE(report.extractions.front().attempted_dag);
+  EXPECT_EQ(report.extractions.front().fallback, "multiple-outputs");
   auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
   auto ret = llvm::cast<mlir::func::ReturnOp>(
       function.getBody().front().getTerminator());
@@ -46,6 +49,88 @@ TEST_F(RewritePipelineTest, MultipleOutputsKeepSharedProducer) {
   unsigned adds = 0;
   module->walk([&](mlir::stablehlo::AddOp) { ++adds; });
   EXPECT_EQ(adds, 1);
+}
+TEST_F(RewritePipelineTest, SingleOutputDagAndBudgetFallbackPreserveSharing) {
+  for (bool limited : {false, true}) {
+    auto module = parse(R"mlir(module {
+      func.func @main(%a: tensor<2x4xi32>, %b: tensor<4x1xi32>) -> tensor<2x1xi32> {
+        %dot = stablehlo.dot_general %a, %b, contracting_dims = [1] x [0]
+            : (tensor<2x4xi32>, tensor<4x1xi32>) -> tensor<2x1xi32>
+        %sum = stablehlo.add %dot, %dot : tensor<2x1xi32>
+        return %sum : tensor<2x1xi32>
+      }
+    })mlir");
+    ASSERT_TRUE(module);
+    TensorRewriteOptions options;
+    // Keep this test focused on extraction and export of the imported DAG.
+    options.runner.iteration_limit = 0;
+    if (limited) options.dag.state_limit = 1;
+    TensorRewriteReport report;
+    ASSERT_TRUE(mlir::succeeded(
+        rewriteUnconstrainedRegions(*module, options, &report)));
+    ASSERT_EQ(report.extractions.size(), 1);
+    const auto& extraction = report.extractions.front();
+    EXPECT_TRUE(extraction.attempted_dag);
+    EXPECT_EQ(extraction.fallback,
+              limited ? "no-dag-candidate" : "baseline-no-worse");
+    EXPECT_NE(report.str().find("selected=tree roots=1 attempted_dag=1"),
+              std::string::npos);
+    if (limited)
+      EXPECT_NE(report.str().find("stop=state-limit"), std::string::npos);
+    auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
+    auto ret = llvm::cast<mlir::func::ReturnOp>(
+        function.getBody().front().getTerminator());
+    auto sum = ret.getOperand(0).getDefiningOp<mlir::stablehlo::AddOp>();
+    ASSERT_TRUE(sum);
+    EXPECT_EQ(sum.getLhs(), sum.getRhs());
+    unsigned dots = 0;
+    module->walk([&](mlir::stablehlo::DotGeneralOp) { ++dots; });
+    EXPECT_EQ(dots, 1);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  }
+}
+TEST_F(RewritePipelineTest, DagSelectsAndExportsSharedDotAfterSaturation) {
+  for (auto mode : {TensorExtractorMode::Auto, TensorExtractorMode::Tree}) {
+    auto module = parse(R"mlir(module {
+      func.func @main(%a: tensor<2x4xi32>, %b: tensor<4x1xi32>) -> tensor<2x1xi32> {
+        %twice = stablehlo.add %a, %a : tensor<2x4xi32>
+        %dot = stablehlo.dot_general %twice, %b, contracting_dims = [1] x [0]
+            : (tensor<2x4xi32>, tensor<4x1xi32>) -> tensor<2x1xi32>
+        return %dot : tensor<2x1xi32>
+      }
+    })mlir");
+    ASSERT_TRUE(module);
+    TensorRewriteOptions options;
+    options.extractor = mode;
+    options.semantic.enable_associativity = false;
+    options.dag.time_limit.reset();
+    TensorRewriteReport report;
+    ASSERT_TRUE(mlir::succeeded(
+        rewriteUnconstrainedRegions(*module, options, &report)));
+    ASSERT_EQ(report.extractions.size(), 1);
+    const auto& extraction = report.extractions.front();
+    // Saturation can also double the smaller RHS (cost 22), while the
+    // shared-dot form still costs only 20.
+    EXPECT_EQ(extraction.baseline_cost, 22.0);
+    auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
+    auto ret = llvm::cast<mlir::func::ReturnOp>(
+        function.getBody().front().getTerminator());
+    if (mode == TensorExtractorMode::Auto) {
+      EXPECT_TRUE(extraction.selected_dag);
+      EXPECT_EQ(extraction.candidate_cost, 20.0);
+      auto sum = ret.getOperand(0).getDefiningOp<mlir::stablehlo::AddOp>();
+      ASSERT_TRUE(sum);
+      EXPECT_EQ(sum.getLhs(), sum.getRhs());
+    } else {
+      EXPECT_FALSE(extraction.attempted_dag);
+      EXPECT_TRUE(
+          ret.getOperand(0).getDefiningOp<mlir::stablehlo::DotGeneralOp>());
+    }
+    unsigned dots = 0;
+    module->walk([&](mlir::stablehlo::DotGeneralOp) { ++dots; });
+    EXPECT_EQ(dots, 1);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  }
 }
 TEST_F(RewritePipelineTest, ScalarDotScalingExportsCorrectOutputBroadcast) {
   for (bool relaxed : {false, true}) {
@@ -202,6 +287,25 @@ TEST_F(RewritePipelineTest, CandidateCostKeepsBaselineOnTiesAndUnknowns) {
 }
 TEST_F(RewritePipelineTest, RewriteCliLimitsAndPolicyAreValidated) {
   TensorRewriteOptions options;
+  EXPECT_EQ(options.extractor, TensorExtractorMode::Auto);
+  EXPECT_EQ(options.dag.state_limit, 10000);
+  EXPECT_EQ(options.dag.time_limit, std::chrono::milliseconds(50));
+  EXPECT_EQ(options.dag.frontier_limit, 1000);
+  EXPECT_TRUE(parseTensorRewriteOption("--extractor=tree", options));
+  EXPECT_EQ(options.extractor, TensorExtractorMode::Tree);
+  EXPECT_TRUE(parseTensorRewriteOption("--extractor=auto", options));
+  EXPECT_EQ(options.extractor, TensorExtractorMode::Auto);
+  EXPECT_TRUE(parseTensorRewriteOption("--dag-states=123", options));
+  EXPECT_EQ(options.dag.state_limit, 123);
+  EXPECT_TRUE(parseTensorRewriteOption("--dag-time-ms=7", options));
+  EXPECT_EQ(options.dag.time_limit, std::chrono::milliseconds(7));
+  EXPECT_TRUE(parseTensorRewriteOption("--dag-frontier=12", options));
+  EXPECT_EQ(options.dag.frontier_limit, 12);
+  for (auto argument :
+       {"--extractor=dag", "--dag-states=0", "--dag-frontier=-1",
+        "--dag-time-ms=bad", "--dag-time-ms=18446744073709551615"})
+    EXPECT_THROW(parseTensorRewriteOption(argument, options),
+                 std::invalid_argument);
   EXPECT_TRUE(parseTensorRewriteOption("--numerical-policy=relaxed", options));
   EXPECT_EQ(options.numerical_policy, NumericalPolicy::AllowReassociation);
   EXPECT_TRUE(parseTensorRewriteOption("--search-visits=123", options));

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -15,62 +16,11 @@
 #include "research/joint_shard/bridge/stablehlo_importer.h"
 
 namespace {
-size_t saturatedMultiply(size_t a, size_t b) {
-  const auto max = std::numeric_limits<size_t>::max() / 4;
-  return b && a > max / b ? max : a * b;
-}
-eggc::CostPolicy<TensorNode> costPolicy(const TensorEGraph& graph,
-                                        ExtractionProfile profile) {
-  return [&graph, profile](
-             const TensorNode& node,
-             const std::vector<size_t>& children) -> std::optional<size_t> {
-    std::vector<TensorFacts> operands;
-    for (auto id : node.operands) operands.push_back(tensorFacts(graph, id));
-    const auto inferred = inferTensorNode(node, operands);
-    size_t local = 1;
-    if (inferred.valid() && node.op != OpKind::Input &&
-        node.op != OpKind::Constant) {
-      auto type = inferred.facts.type;
-      local = type.hasStaticShape()
-                  ? std::max<int64_t>(1, type.getNumElements())
-                  : 1024;
-      if (profile == ExtractionProfile::Compute) {
-        if (node.op == OpKind::DotGeneral) {
-          const auto& attrs = std::get<DotGeneralAttrs>(node.attrs);
-          for (auto axis : attrs.lhs_contracting) {
-            auto size = operands[0].type.getDimSize(axis);
-            local = saturatedMultiply(
-                local, size < 0 ? 32 : std::max<int64_t>(1, size));
-          }
-          local = saturatedMultiply(local, 2);
-        } else if (node.op == OpKind::Exp || node.op == OpKind::Log ||
-                   node.op == OpKind::Sqrt || node.op == OpKind::Tanh)
-          local = saturatedMultiply(local, 8);
-        else if (node.op == OpKind::Transpose || node.op == OpKind::Reshape ||
-                 node.op == OpKind::BroadcastInDim)
-          local = 1;
-      }
-      if (profile == ExtractionProfile::Depth) local = 1;
-    }
-    size_t total = local;
-    for (auto cost : children) {
-      if (profile == ExtractionProfile::Depth) {
-        if (cost == std::numeric_limits<size_t>::max()) return std::nullopt;
-        total = std::max(total, cost + 1);
-      } else {
-        if (cost > std::numeric_limits<size_t>::max() - total)
-          return std::nullopt;
-        total += cost;
-      }
-    }
-    return total;
-  };
-}
 struct NodeHash {
   size_t operator()(const TensorNode& node) const { return node.hash(); }
 };
 void rewriteIsland(const std::vector<mlir::Operation*>& island,
-                   const std::vector<TensorRewrite>& rules,
+                   const eggc::CompiledRules<TensorNode, TensorAnalysis>& rules,
                    const TensorRewriteOptions& options,
                    TensorRewriteReport& report) {
   if (island.empty()) return;
@@ -101,12 +51,15 @@ void rewriteIsland(const std::vector<mlir::Operation*>& island,
     std::vector<eggc::Id> ids;
     for (auto root : roots) ids.push_back(importer.importValue(root));
     report.runs.push_back(eggc::run(graph, rules, options.runner));
-    TensorExtractor extractor(graph, costPolicy(graph, options.extraction));
+    TensorExtractionReport extraction;
+    auto selectedRoots =
+        extractTensorRoots(graph, ids, options.extraction, options.extractor,
+                           options.dag, extraction);
+    report.extractions.push_back(std::move(extraction));
     TensorRecExpr expression;
     std::unordered_map<TensorNode, eggc::Id, NodeHash> shared;
     std::vector<size_t> outputIds;
-    for (auto id : ids) {
-      auto selected = extractor.find_best(id).second;
+    for (const auto& selected : selectedRoots) {
       std::vector<eggc::Id> remapped;
       for (auto node : selected.nodes) {
         for (auto& operand : node.operands) operand = remapped[operand];
@@ -145,6 +98,23 @@ const char* stopName(eggc::StopReason reason) {
       return "match-limit";
     case eggc::StopReason::SearchLimit:
       return "search-limit";
+    case eggc::StopReason::UserRequested:
+      return "user-requested";
+    case eggc::StopReason::MemoryLimit:
+      return "memory-limit";
+  }
+  return "unknown";
+}
+const char* dagStopName(eggc::DagStopReason reason) {
+  switch (reason) {
+    case eggc::DagStopReason::Exhausted:
+      return "exhausted";
+    case eggc::DagStopReason::StateLimit:
+      return "state-limit";
+    case eggc::DagStopReason::TimeLimit:
+      return "time-limit";
+    case eggc::DagStopReason::FrontierLimit:
+      return "frontier-limit";
   }
   return "unknown";
 }
@@ -156,6 +126,17 @@ size_t positiveNumber(std::string_view text) {
     throw std::invalid_argument("expected a positive limit: " +
                                 std::string(text));
   return value;
+}
+std::chrono::milliseconds positiveMilliseconds(std::string_view text) {
+  auto value = positiveNumber(text);
+  using Rep = std::chrono::milliseconds::rep;
+  const auto max = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::duration::max())
+                       .count();
+  if (value > static_cast<size_t>(max))
+    throw std::invalid_argument("time limit is too large: " +
+                                std::string(text));
+  return std::chrono::milliseconds(static_cast<Rep>(value));
 }
 }  // namespace
 mlir::LogicalResult rewriteUnconstrainedRegions(
@@ -181,6 +162,10 @@ mlir::LogicalResult rewriteUnconstrainedRegions(
   for (const auto& rule : rules)
     if (!ruleNames.insert(rule.name).second)
       throw std::invalid_argument("duplicate DSL/C++ rule name: " + rule.name);
+  // Freeze and validate the rules once for the module. Ordinary pattern rules
+  // can also reuse their compiled matcher and replacement programs per island.
+  eggc::CompiledRules<TensorNode, TensorAnalysis> compiledRules(
+      std::move(rules));
   TensorRewriteReport report;
   for (auto function : module.getOps<mlir::func::FuncOp>()) {
     if (function.isExternal()) continue;
@@ -192,12 +177,12 @@ mlir::LogicalResult rewriteUnconstrainedRegions(
         island.push_back(op);
         continue;
       }
-      rewriteIsland(island, rules, options, report);
+      rewriteIsland(island, compiledRules, options, report);
       island.clear();
       ++report.boundaries[op->getName().getStringRef().str() + ": " +
                           tensorImportRejection(op)];
     }
-    rewriteIsland(island, rules, options, report);
+    rewriteIsland(island, compiledRules, options, report);
   }
   report.rules = *semantic.report;
   if (output) *output = std::move(report);
@@ -222,12 +207,37 @@ std::string TensorRewriteReport::str() const {
     out << "run " << i << " stop=" << stopName(runs[i].reason)
         << " iterations=" << runs[i].iterations << " nodes=" << runs[i].nodes
         << '\n';
+  for (size_t i = 0; i < extractions.size(); ++i) {
+    const auto& extraction = extractions[i];
+    out << "extraction " << i
+        << " selected=" << (extraction.selected_dag ? "dag" : "tree")
+        << " roots=" << extraction.roots
+        << " attempted_dag=" << extraction.attempted_dag;
+    if (extraction.stop)
+      out << " stop=" << dagStopName(*extraction.stop)
+          << " optimal=" << extraction.optimal
+          << " states=" << extraction.explored_states
+          << " peak_frontier=" << extraction.peak_frontier << " search_us="
+          << std::chrono::duration_cast<std::chrono::microseconds>(
+                 extraction.search_time)
+                 .count();
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    if (extraction.baseline_cost)
+      out << " baseline_cost=" << *extraction.baseline_cost;
+    if (extraction.candidate_cost)
+      out << " candidate_cost=" << *extraction.candidate_cost;
+    if (!extraction.fallback.empty())
+      out << " fallback=" << extraction.fallback;
+    out << '\n';
+  }
   return out.str();
 }
 std::string_view tensorRewriteOptionHelp() {
   return "[--rules=path] [--numerical-policy=strict|relaxed] [--iterations=N] "
          "[--nodes=N] [--matches=N] [--search-visits=N] [--time-ms=N] "
          "[--extraction=compute|depth|memory] [--rule-group=exact|algebra|all] "
+         "[--extractor=auto|tree] [--dag-states=N] [--dag-time-ms=N] "
+         "[--dag-frontier=N] "
          "[--rewrite-report]";
 }
 bool parseTensorRewriteOption(std::string_view argument,
@@ -282,8 +292,20 @@ bool parseTensorRewriteOption(std::string_view argument,
   } else if (name == "--search-visits")
     options.semantic.visit_limit = positiveNumber(value);
   else if (name == "--time-ms")
-    options.runner.time_limit =
-        std::chrono::milliseconds(positiveNumber(value));
+    options.runner.time_limit = positiveMilliseconds(value);
+  else if (name == "--extractor") {
+    if (value == "auto")
+      options.extractor = TensorExtractorMode::Auto;
+    else if (value == "tree")
+      options.extractor = TensorExtractorMode::Tree;
+    else
+      throw std::invalid_argument("extractor must be auto or tree");
+  } else if (name == "--dag-states")
+    options.dag.state_limit = positiveNumber(value);
+  else if (name == "--dag-time-ms")
+    options.dag.time_limit = positiveMilliseconds(value);
+  else if (name == "--dag-frontier")
+    options.dag.frontier_limit = positiveNumber(value);
   else if (name == "--extraction") {
     if (value == "compute")
       options.extraction = ExtractionProfile::Compute;

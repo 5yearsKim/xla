@@ -201,8 +201,26 @@ outside the island. An extractor is shared across roots; its selected expression
 DAGs are deduplicated and exported with one cache. Unsupported/annotated ops
 separate islands, so this is not whole-function optimization across constraints.
 Compute, depth, and memory extraction profiles replace the old add-order demo.
-The memory profile uses logical intermediate element counts, not peak liveness;
-these additive extraction scores are not globally optimal DAG costs.
+The default `--extractor=auto` uses bounded egg-c DAG extraction for islands
+with one output and the compute profile. Shared computations are charged once.
+The existing tree extractor supplies a baseline; both expressions are scored
+by summing the same local operator weights once per expression node. A DAG
+candidate replaces the baseline only on a strict cost improvement, including
+when search stops with a finite candidate before proving optimality. Ties,
+unavailable candidates, multiple outputs, and depth/memory profiles retain tree
+extraction. `--extractor=tree` disables DAG search for comparison.
+
+Each eligible island has independent defaults of `--dag-states=10000`,
+`--dag-time-ms=50`, and `--dag-frontier=1000`. Limits cover search, not baseline
+extraction or export. Time checks are cooperative, and the frontier budget
+counts retained frames rather than bytes. `--rewrite-report` records the
+selected extractor, fallback reason, baseline/candidate compute costs, search
+time, explored states, peak frontier, stop reason, and whether the DAG search
+proved optimality. An optimal search does not imply measured runtime optimality.
+
+The memory profile uses logical intermediate element counts, not peak liveness.
+It and the depth profile keep their existing tree objectives; no multi-output
+DAG or scheduling/liveness optimizer is implemented.
 
 ## Candidate selection and next extensions
 
@@ -236,8 +254,11 @@ modular integer numerical oracle), rectangular transpose/dot scalar scaling,
 explicit scalar/uniform guards and rejection without graph mutation,
 non-involutive transpose composition, shared outputs, batched dots, reductions,
 empty reductions, metadata boundaries, dot transpose absorption, costs, and CLI
-options. Existing fixed-boundary tests now expect strict evaluation order.
-No builds or tests were run for this implementation, as requested.
+options. Extraction tests additionally cover a modular integer dot equation
+where preserving sharing beats tree factorization, state/time/frontier budgets,
+worse and improved partial candidates, ties, and depth/memory/multiple-output
+fallbacks. Pipeline tests check shared export and DAG diagnostics. Existing
+fixed-boundary tests expect strict evaluation order.
 
 Run these commands from the XLA workspace root:
 
@@ -250,7 +271,8 @@ bazel-bin/research/joint_shard/tools/run_shardy research/joint_shard/testdata/do
 
 Use `--numerical-policy=relaxed` explicitly to explore floating algebraic
 candidates. `--iterations`, `--nodes`, `--matches`, `--search-visits`, `--time-ms`,
-and `--extraction` customize the driver. C++20 and the existing
+`--extraction`, `--extractor`, `--dag-states`, `--dag-time-ms`, and
+`--dag-frontier` customize the driver. C++20 and the existing
 `--config=joint_shard` toolchain configuration are required.
 
 The additional generic engine changes are `StopReason::SearchLimit` for a
