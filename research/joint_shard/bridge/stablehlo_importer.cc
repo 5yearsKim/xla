@@ -174,6 +174,8 @@ void StableHloImporter::bindValue(mlir::Value value, unsigned index) {
     throw std::invalid_argument("region input requires ranked tensor type");
   cache_[value] =
       graph_.add(TensorNode{OpKind::Input, InputAttrs{index, type}, {}});
+  original_ids_[value] =
+      original_.add(TensorNode{OpKind::Input, InputAttrs{index, type}, {}});
 }
 eggc::Id StableHloImporter::importValue(mlir::Value value) {
   auto cached = cache_.find(value);
@@ -188,6 +190,10 @@ eggc::Id StableHloImporter::importValue(mlir::Value value) {
   const unsigned count = node.op == OpKind::Reduce ? 1 : op->getNumOperands();
   for (unsigned i = 0; i < count; ++i)
     node.operands.push_back(importValue(op->getOperand(i)));
+  auto original = node;
+  for (unsigned i = 0; i < count; ++i)
+    original.operands[i] = original_ids_.lookup(op->getOperand(i));
+  original_ids_[value] = original_.add(std::move(original));
   auto id = graph_.add(std::move(node));
   cache_[value] = id;
   return id;

@@ -86,3 +86,22 @@ cc_test(
         "@stablehlo//:stablehlo_ops",
     ],
 )
+
+cc_test(
+    name = "region_optimizer_test",
+    srcs = ["region_optimizer_test.cc"],
+    linkstatic = True,
+    deps = [
+        "//research/joint_shard/search:region_optimizer",
+        "//research/joint_shard/sharding:region_evaluator",
+        "//research/joint_shard/transforms:region_candidates",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)

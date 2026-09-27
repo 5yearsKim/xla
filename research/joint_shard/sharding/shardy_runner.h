@@ -23,8 +23,8 @@ struct ModuleCost {
   unsigned unknown_costs = 0;
 };
 ModuleCost estimateModuleCost(mlir::ModuleOp module);
-// Conservative: an unknown estimate never displaces a measured baseline.
-bool betterModuleCost(const ModuleCost& candidate, const ModuleCost& baseline);
+// Also used by isolated, already annotated reshard adapters.
+mlir::LogicalResult lowerReshardsToCollectives(mlir::ModuleOp module);
 
 struct ShardySnapshot {
   std::string name;

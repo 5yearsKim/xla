@@ -4,7 +4,6 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <tuple>
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -113,12 +112,16 @@ mlir::LogicalResult ShardyRunner::run(mlir::ModuleOp module,
   if (options.stopAfter == ShardyStage::ExplicitReshards)
     return mlir::success();
 
+  if (mlir::failed(lowerReshardsToCollectives(module))) return mlir::failure();
+  return capture(module, "03_collectives", options.dumpDirectory);
+}
+
+mlir::LogicalResult lowerReshardsToCollectives(mlir::ModuleOp module) {
   mlir::PassManager collectives(module.getContext());
   collectives.enableVerifier(true);
   collectives.addNestedPass<mlir::func::FuncOp>(
       mlir::sdy::createReshardToCollectivesPass());
-  if (mlir::failed(collectives.run(module))) return mlir::failure();
-  return capture(module, "03_collectives", options.dumpDirectory);
+  return collectives.run(module);
 }
 
 namespace {
@@ -225,10 +228,4 @@ ModuleCost estimateModuleCost(mlir::ModuleOp module) {
     addCost(cost.compute_work, work, cost.unknown_costs);
   });
   return cost;
-}
-bool betterModuleCost(const ModuleCost& candidate, const ModuleCost& baseline) {
-  if (candidate.unknown_costs || baseline.unknown_costs) return false;
-  return std::tie(candidate.communication_payload_bytes,
-                  candidate.compute_work) <
-         std::tie(baseline.communication_payload_bytes, baseline.compute_work);
 }

@@ -18,6 +18,8 @@ cc_library(
     hdrs = ["rewrite_regions.h"],
     deps = [
         ":tensor_extraction",
+        ":rewrite_options",
+        ":region_candidates",
         "//research/joint_shard/bridge/tensor_lang:tensorlang",
         "//research/joint_shard/bridge:stablehlo_exporter",
         "//research/joint_shard/bridge:stablehlo_importer",
@@ -27,5 +29,41 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "rewrite_options",
+    srcs = ["rewrite_options.cc"],
+    hdrs = ["rewrite_options.h"],
+    deps = [
+        ":tensor_extraction",
+        "//research/joint_shard/bridge/tensor_lang:tensorlang",
+        "//research/joint_shard/egg-c:eggc",
+    ],
+)
+cc_library(
+    name = "regionizer",
+    srcs = ["regionizer.cc"],
+    hdrs = ["regionizer.h"],
+    deps = [
+        "//research/joint_shard/bridge:stablehlo_importer",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+    ],
+)
+cc_library(
+    name = "region_candidates",
+    srcs = ["region_candidates.cc"],
+    hdrs = ["region_candidates.h"],
+    deps = [
+        ":regionizer",
+        ":rewrite_options",
+        ":tensor_extraction",
+        "//research/joint_shard/bridge:stablehlo_importer",
+        "//research/joint_shard/bridge/tensor_lang:tensorlang",
+        "//research/joint_shard/egg-c:eggc",
+        "@llvm-project//llvm:Support",
     ],
 )

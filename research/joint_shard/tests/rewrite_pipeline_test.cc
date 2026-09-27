@@ -277,14 +277,6 @@ TEST_F(RewritePipelineTest, EmptyReductionRetainsCanonicalInitializer) {
               0.0f);
   });
 }
-TEST_F(RewritePipelineTest, CandidateCostKeepsBaselineOnTiesAndUnknowns) {
-  ModuleCost baseline{100, 50, 0};
-  EXPECT_FALSE(betterModuleCost(baseline, baseline));
-  EXPECT_TRUE(betterModuleCost({99, 100, 0}, baseline));
-  EXPECT_TRUE(betterModuleCost({100, 49, 0}, baseline));
-  EXPECT_FALSE(betterModuleCost({0, 0, 1}, baseline));
-  EXPECT_FALSE(betterModuleCost({0, 0, 0}, {100, 50, 1}));
-}
 TEST_F(RewritePipelineTest, RewriteCliLimitsAndPolicyAreValidated) {
   TensorRewriteOptions options;
   EXPECT_EQ(options.extractor, TensorExtractorMode::Auto);

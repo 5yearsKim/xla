@@ -19,3 +19,44 @@ cc_library(
         "@shardy//shardy/dialect/sdy/transforms/propagation:passes",
     ],
 )
+
+cc_library(
+    name = "boundary_state",
+    srcs = ["boundary_state.cc"],
+    hdrs = ["boundary_state.h"],
+    deps = [
+        "//research/joint_shard/transforms:regionizer",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+    ],
+)
+cc_library(
+    name = "cost_model",
+    srcs = ["cost_model.cc"],
+    hdrs = ["cost_model.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+cc_library(
+    name = "region_evaluator",
+    srcs = ["region_evaluator.cc"],
+    hdrs = ["region_evaluator.h"],
+    deps = [
+        ":boundary_state",
+        ":cost_model",
+        ":shardy_runner",
+        "//research/joint_shard/transforms:region_candidates",
+        "//research/joint_shard/bridge:stablehlo_exporter",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+    ],
+)

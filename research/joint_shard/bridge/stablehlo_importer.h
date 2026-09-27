@@ -21,10 +21,17 @@ class StableHloImporter {
   // Bind every region boundary before importValue, including block arguments.
   void bindValue(mlir::Value value, unsigned index);
   eggc::Id importValue(mlir::Value value);
+  // Recorded directly from the source SSA graph, before equality saturation.
+  const TensorRecExpr& originalExpression() const { return original_; }
+  size_t originalRoot(mlir::Value value) const {
+    return original_ids_.lookup(value);
+  }
 
  private:
   TensorEGraph& graph_;
   llvm::DenseMap<mlir::Value, eggc::Id> cache_;
+  TensorRecExpr original_;
+  llvm::DenseMap<mlir::Value, eggc::Id> original_ids_;
 };
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_IMPORTER_H_

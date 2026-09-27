@@ -24,6 +24,11 @@ class FixedShardingTest : public ::testing::Test {
   mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef text) {
     return mlir::parseSourceString<mlir::ModuleOp>(text, &context_);
   }
+  TensorRewriteOptions strictOptions() {
+    TensorRewriteOptions options;
+    options.numerical_policy = NumericalPolicy::PreserveEvaluation;
+    return options;
+  }
   mlir::MLIRContext context_;
 };
 
@@ -52,7 +57,8 @@ module {
   });
   ASSERT_TRUE(fixed);
   auto attrs = fixed->getAttrDictionary();
-  ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module)));
+  ASSERT_TRUE(
+      mlir::succeeded(rewriteUnconstrainedRegions(*module, strictOptions())));
   EXPECT_EQ(fixed->getAttrDictionary(), attrs);
   EXPECT_EQ(fixed.getRhs(), function.getArgument(2));
   auto before = fixed.getLhs().getDefiningOp<mlir::stablehlo::AddOp>();
@@ -92,7 +98,8 @@ module {
       [&](mlir::sdy::ShardingConstraintOp op) { constraints.push_back(op); });
   ASSERT_EQ(constraints.size(), 2);
   auto attrs = constraints[0]->getAttrDictionary();
-  ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module)));
+  ASSERT_TRUE(
+      mlir::succeeded(rewriteUnconstrainedRegions(*module, strictOptions())));
   EXPECT_EQ(constraints[0]->getAttrDictionary(), attrs);
   EXPECT_TRUE(constraints[1]->use_empty());
   auto ret = llvm::cast<mlir::func::ReturnOp>(
@@ -127,7 +134,8 @@ module {
   });
   ASSERT_TRUE(unused && transpose);
   auto attrs = unused->getAttrDictionary();
-  ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module)));
+  ASSERT_TRUE(
+      mlir::succeeded(rewriteUnconstrainedRegions(*module, strictOptions())));
   EXPECT_EQ(unused->getAttrDictionary(), attrs);
   EXPECT_TRUE(unused->use_empty());
   // Transpose is supported now; obtain its reconstructed replacement.
@@ -173,7 +181,8 @@ module {
   }
 })mlir");
   ASSERT_TRUE(module);
-  ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module)));
+  ASSERT_TRUE(
+      mlir::succeeded(rewriteUnconstrainedRegions(*module, strictOptions())));
   ShardyRunner runner;
   ASSERT_TRUE(mlir::succeeded(runner.run(*module)));
   EXPECT_GT(runner.snapshots().back().communicationOps.at("sdy.all_gather"), 0);

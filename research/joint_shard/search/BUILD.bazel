@@ -1,0 +1,21 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+cc_library(
+    name = "region_optimizer",
+    srcs = [
+        "region_optimizer.cc",
+        "region_summary.cc",
+    ],
+    hdrs = [
+        "region_optimizer.h",
+        "region_summary.h",
+    ],
+    deps = [
+        "//research/joint_shard/sharding:region_evaluator",
+        "//research/joint_shard/transforms:region_candidates",
+        "//research/joint_shard/bridge:stablehlo_importer",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+    ],
+)

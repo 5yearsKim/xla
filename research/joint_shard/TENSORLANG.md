@@ -63,7 +63,7 @@ returns `PropertyDecision{allowed, reason}`. `hasProperty` is its boolean wrappe
 These are conditional contracts. Transpose is an involution only for a
 self-inverse permutation. Data-moving linearity requires static shapes.
 Integer arithmetic uses its modular algebra. Floating and complex arithmetic
-are conservative in the default **strict** policy: no operand swapping,
+are conservative in the **strict** policy: no operand swapping,
 reassociation, distribution, or arithmetic involution is enabled. Layout
 composition and validated data movement remain available.
 
@@ -224,21 +224,21 @@ DAG or scheduling/liveness optimizer is implemented.
 
 ## Candidate selection and next extensions
 
-`run_shardy --round-trip` evaluates the original plus one rewritten candidate.
-`--candidates=1..4` includes the original plus bounded compute/depth/memory
-candidates. Each runs on an independent clone through Shardy; a failed rewritten
-candidate cannot displace the baseline. Comparisons require the collective stage.
-The score is estimated logical collective payload bytes, then compute work.
-Ties preserve the original. Unknown/overflowing estimates do not displace the
-baseline. Dumps are separated by candidate. Stdout is the selected verified
-module; diagnostics and rewrite reports go to stderr.
+`summarize_regions` owns joint region candidate/layout search. It saturates each
+region once, preserves the original source expression, extracts bounded unique
+profile candidates with ordered shared roots, evaluates each under exact boundary
+states on independent Shardy clones, and produces a reshard-pruned region frontier.
+Driver options default to relaxed floating-point algebra. Low-level semantic
+APIs retain explicit strict/relaxed policies and all existing guards.
 
-The payload metric sums the largest global operand/result tensor payload per
-collective. It is a topology-independent proxy, **not** actual network bytes or
-latency: device groups, local partitions, and collective algorithms are not yet
-modeled. Compute work estimates dot multiply/adds, elementwise/reduction work, and
-transpose element movement. Selection is among a few scalar extraction profiles, not a k-best/layout
-DP or automatic search over new boundary shardings.
+`--max-candidates=32` is a cap, not a guarantee of 32 candidates. This milestone
+uses original, compute tree/DAG, depth and memory alternatives. It does not yet
+have k-best or sharding-aware extraction. `run_shardy` now only runs the annotated
+pipeline; its previous candidate comparison and global lexicographic selection
+were removed. Global payload/work counters are diagnostics. The optimizer uses
+one additive per-device work/collective cost model for execution and adapters.
+See [REGION_OPTIMIZER.md](REGION_OPTIMIZER.md) for architecture, policies, tests,
+limits and experiments.
 
 Useful next extensions are per-device/topology-aware communication costs,
 layout-conditioned extraction, uniform-scalar facts beyond simple provenance,
@@ -263,14 +263,14 @@ fixed-boundary tests expect strict evaluation order.
 Run these commands from the XLA workspace root:
 
 ```sh
-bazel build --config=joint_shard //research/joint_shard/tools:parse_stablehlo //research/joint_shard/tools:run_shardy
+bazel build --config=joint_shard //research/joint_shard/tools:parse_stablehlo //research/joint_shard/tools:run_shardy //research/joint_shard/tools:summarize_regions
 bazel test --config=joint_shard //research/joint_shard:tests --test_output=errors
 bazel-bin/research/joint_shard/tools/parse_stablehlo research/joint_shard/testdata/megatron_layer/01.before_propagation.mlir --rewrite-report
-bazel-bin/research/joint_shard/tools/run_shardy research/joint_shard/testdata/dot_gather.mlir --candidates=4 --rewrite-report --dump-dir=/tmp/joint_shard
+bazel-bin/research/joint_shard/tools/summarize_regions research/joint_shard/testdata/scaling_dot.mlir --dump-dir=/tmp/joint_shard_regions
 ```
 
-Use `--numerical-policy=relaxed` explicitly to explore floating algebraic
-candidates. `--iterations`, `--nodes`, `--matches`, `--search-visits`, `--time-ms`,
+Relaxed floating algebra is the driver default. Use
+`--numerical-policy=strict` for strict evaluation. `--iterations`, `--nodes`, `--matches`, `--search-visits`, `--time-ms`,
 `--extraction`, `--extractor`, `--dag-states`, `--dag-time-ms`, and
 `--dag-frontier` customize the driver. C++20 and the existing
 `--config=joint_shard` toolchain configuration are required.

@@ -1,5 +1,8 @@
 # StableHLO, egg-c, and Shardy prototype
 
+The region optimizer architecture, policies and experiments are in
+[REGION_OPTIMIZER.md](REGION_OPTIMIZER.md).
+
 The TensorLang implementation and extension contracts are in
 [TENSORLANG.md](TENSORLANG.md). The bridge uses structural nodes with typed
 operator attributes;
@@ -14,8 +17,9 @@ implementations:
 joint_shard/
   BUILD.bazel       # aggregate integration-test suite
   bridge/           # TensorLang nodes and StableHLO ↔ egg-c import/export
-  transforms/       # rewriting between fixed sharding points
-  sharding/         # Shardy pipeline and snapshots
+  transforms/       # region discovery, saturation and candidate extraction
+  sharding/         # boundary layouts, Shardy evaluation and costs
+  search/           # region summaries, dominance pruning and orchestration
   tools/            # command-line executables
   tests/            # cross-component C++ integration tests
   testdata/         # MLIR fixtures
@@ -38,11 +42,11 @@ external node and analysis APIs with `Language` and `AnalysisFor` concepts.
 Build and test from the XLA workspace root:
 
 ```sh
-bazel build --config=joint_shard //research/joint_shard/tools:run_shardy //research/joint_shard/tools:parse_stablehlo
+bazel build --config=joint_shard //research/joint_shard/tools:summarize_regions //research/joint_shard/tools:run_shardy //research/joint_shard/tools:parse_stablehlo
 bazel test --config=joint_shard //research/joint_shard:tests
 bazel-bin/research/joint_shard/tools/run_shardy \
   research/joint_shard/testdata/dot_general.mlir \
-  --round-trip --dump-dir=/tmp/joint_shard
+  --dump-dir=/tmp/joint_shard
 ```
 
 Inputs provide their own `sdy.mesh` definitions and sharding annotations. The
@@ -57,7 +61,7 @@ replication, and priorities without a second sharding representation.
 
 ## Rewriting around fixed points
 
-`--round-trip` rewrites supported unannotated computations between preserved
+`parse_stablehlo` rewrites supported unannotated computations between preserved
 operations. An operation carrying `sdy.sharding` is a boundary, including a
 partially open annotation. Explicit `sdy.sharding_constraint` operations are also
 boundaries. Their results enter the e-graph as opaque leaves; their operands are
@@ -79,18 +83,29 @@ validates proposed expressions before insertion/export. Derived `result_layout`
 and `xla_shape` hints are recomputed downstream; unknown attrs remain boundaries.
 
 The default pipeline loads embedded `tensor.rules` and appends attribute-aware
-rules. Strict numerical semantics are the default; floating algebra requires
-`--numerical-policy=relaxed` or explicit numerical permissions. Every captured
+rules. Relaxed floating-point algebra is the default and can change numerical results.
+Use `--numerical-policy=strict` to preserve floating evaluation, or configure
+explicit numerical permissions. Every captured
 operator occurrence is checked, and a complete RHS is validated before mutation.
 Search limits and rejection reasons are exposed through `--rewrite-report`.
 Contiguous supported islands share one graph and export cache across all outputs.
 
-`run_shardy --round-trip` compares the original with one rewritten candidate;
-`--candidates=4` adds depth and memory extraction profiles. Candidates run on
-independent clones and are scored by logical collective payload, then estimated
-compute work. Ties and unknown estimates retain the original. This is a bounded
-comparison with a coarse global-payload proxy, not topology-aware sharding search.
-See [TENSORLANG.md](TENSORLANG.md) for the contracts and remaining extensions.
+`summarize_regions` splits supported computations into bounded regions, saturates
+once per region, evaluates unique original/compute/depth/memory candidates under
+exact boundary layouts, retains the best candidate per boundary, and prunes
+states served more cheaply by another plan plus directed reshards. It prints
+region frontiers and preserves the source module. Candidate count defaults to a
+cap of 32, with at most five distinct profile candidates in this milestone.
+
+```sh
+bazel-bin/research/joint_shard/tools/summarize_regions \
+  research/joint_shard/testdata/scaling_dot.mlir \
+  --dump-dir=/tmp/joint_shard_regions
+```
+
+`run_shardy` runs the raw annotated pipeline; its previous whole-module candidate
+comparison options have been removed. See [REGION_OPTIMIZER.md](REGION_OPTIMIZER.md)
+for boundary policies, cost parameters, budgets and output artifacts.
 
 To inspect rewriting without running propagation:
 
@@ -128,9 +143,9 @@ collectives). Verified snapshots are:
 03_collectives.mlir
 ```
 
-`00_input` is the module entering Shardy. With multiple candidates, snapshots
-are saved in separate candidate directories. Stdout prints the selected module;
-costs, selection, and optional rewrite reports go to stderr. Full explicit-reshard insertion can also insert reduction collectives;
+`00_input` is the module entering Shardy. `run_shardy` prints the final module to stdout and snapshot cost diagnostics to
+stderr. The optimizer stores snapshots separately for every candidate/boundary
+evaluation. Full explicit-reshard insertion can also insert reduction collectives;
 zero reshards does not imply zero communication.
 
 The annotated matmul samples use `data=2, model=2`:
