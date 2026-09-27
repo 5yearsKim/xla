@@ -8,6 +8,8 @@
 #include "gtest/gtest.h"
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
 
+namespace joint_shard {
+
 namespace {
 class SemanticRewriteTest : public ::testing::Test {
  protected:
@@ -515,3 +517,5 @@ TEST_F(SemanticRewriteTest, StandaloneInferenceDistinguishesUnknownAndInvalid) {
       InferenceStatus::Invalid);
 }
 }  // namespace
+
+}  // namespace joint_shard

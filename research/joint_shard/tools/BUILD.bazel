@@ -1,5 +1,6 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 cc_library(
     name = "rewrite_cli_options",
@@ -16,8 +17,9 @@ cc_binary(
     srcs = ["run_shardy.cc"],
     data = ["//research/joint_shard/testdata:samples"],
     deps = [
-        "@cxxopts//:cxxopts",
+        "//research/joint_shard/reporting:artifact_writer",
         "//research/joint_shard/sharding:shardy_runner",
+        "@cxxopts//:cxxopts",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
@@ -31,8 +33,9 @@ cc_binary(
     srcs = ["parse_stablehlo.cc"],
     deps = [
         ":rewrite_cli_options",
-        "@cxxopts//:cxxopts",
+        "//research/joint_shard/reporting:reports",
         "//research/joint_shard/transforms:rewrite_regions",
+        "@cxxopts//:cxxopts",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
@@ -47,13 +50,27 @@ cc_binary(
     data = ["//research/joint_shard/testdata:samples"],
     deps = [
         ":rewrite_cli_options",
-        "@cxxopts//:cxxopts",
+        "//research/joint_shard/reporting:artifact_writer",
+        "//research/joint_shard/reporting:reports",
         "//research/joint_shard/search:region_optimizer",
         "//research/joint_shard/transforms:rewrite_options",
+        "@cxxopts//:cxxopts",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@shardy//shardy/dialect/sdy/ir:register",
         "@stablehlo//:register",
     ],
+)
+
+cc_test(
+    name = "rewrite_cli_options_test",
+    srcs = ["rewrite_cli_options_test.cc"],
+    deps = [
+        ":rewrite_cli_options",
+        "//research/joint_shard/transforms:rewrite_options",
+        "@com_google_googletest//:gtest_main",
+        "@cxxopts//:cxxopts",
+    ],
+    linkstatic = True,
 )

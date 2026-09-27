@@ -1,0 +1,25 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_testonly = True, default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "mlir_test",
+    hdrs = ["mlir_test.h"],
+    deps = [
+        "@com_google_googletest//:gtest",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+    ],
+)
+
+cc_library(
+    name = "region_test",
+    hdrs = ["region_test.h"],
+    deps = [
+        ":mlir_test",
+        "//research/joint_shard/transforms:regionizer",
+    ],
+)

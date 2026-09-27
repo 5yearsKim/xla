@@ -10,6 +10,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "research/joint_shard/bridge/stablehlo_importer.h"
 
+namespace joint_shard {
+
 Region describeRegion(llvm::ArrayRef<mlir::Operation*> operations) {
   Region region;
   region.operations.assign(operations.begin(), operations.end());
@@ -137,3 +139,5 @@ std::vector<Region> Regionizer::split(mlir::func::FuncOp function) const {
   splitRange(island);
   return regions;
 }
+
+}  // namespace joint_shard

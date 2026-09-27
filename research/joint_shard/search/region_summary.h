@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "research/joint_shard/search/region_interface.h"
-#include "research/joint_shard/sharding/region_evaluator.h"
+#include "research/joint_shard/sharding/evaluation_result.h"
+#include "research/joint_shard/transforms/candidate.h"
+
+namespace joint_shard {
 using PlanId = size_t;
 
 struct RegionPlan {
@@ -42,10 +45,12 @@ struct RegionSummary {
   std::vector<PlanId> frontier;
   std::vector<DominanceWitness> dominance;
 
+  // Retain one winner per exact boundary, releasing losing artifacts
+  // immediately.
   void record(size_t candidate_id, const BoundaryState& boundary,
               EvaluationResult result);
-  void keepBestPerBoundary();
-  std::string str() const;
+  // Call after recording evaluations to order plans and assign stable IDs.
+  void finalizePlans();
 };
 using ReshardEstimator = std::function<Cost(const TensorSharding&,
                                             const TensorSharding&, mlir::Type)>;
@@ -53,5 +58,7 @@ using ReshardEstimator = std::function<Cost(const TensorSharding&,
 // directly to a surviving plan; equal-cost states cannot delete one another.
 void pruneDominatedStates(RegionSummary& summary,
                           const ReshardEstimator& estimate);
+
+}  // namespace joint_shard
 
 #endif

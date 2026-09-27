@@ -1,17 +1,17 @@
 #ifndef RESEARCH_JOINT_SHARD_SHARDING_REGION_EVALUATOR_H_
 #define RESEARCH_JOINT_SHARD_SHARDING_REGION_EVALUATOR_H_
 
+#include <map>
+#include <utility>
+
 #include "research/joint_shard/sharding/boundary_state.h"
 #include "research/joint_shard/sharding/cost_model.h"
+#include "research/joint_shard/sharding/evaluation_result.h"
 #include "research/joint_shard/sharding/shardy_runner.h"
-#include "research/joint_shard/transforms/region_candidates.h"
 
-struct EvaluationResult {
-  bool feasible = false;
-  Cost cost;
-  std::string failure;
-  std::vector<ShardySnapshot> snapshots;
-};
+namespace joint_shard {
+struct Region;
+struct Candidate;
 
 // Prepared modules are unannotated and never mutated during evaluation.
 mlir::OwningOpRef<mlir::ModuleOp> prepareCandidateModule(
@@ -30,14 +30,6 @@ class RegionEvaluator {
   CostModel model_;
 };
 
-struct ReshardPlan {
-  bool feasible = false;
-  Cost cost{0, 0, 1};
-  TensorSharding from, to;
-  mlir::Type type;
-  // Empty only for an identity adapter.
-  std::string lowered_mlir;
-};
 class ReshardCostOracle {
  public:
   ReshardCostOracle(MeshContext mesh, CostModel model = CostModel{})
@@ -53,5 +45,7 @@ class ReshardCostOracle {
   CostModel model_;
   std::map<std::string, ReshardPlan> cache_;
 };
+
+}  // namespace joint_shard
 
 #endif

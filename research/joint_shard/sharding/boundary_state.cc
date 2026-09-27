@@ -6,7 +6,10 @@
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/Builders.h"
+#include "research/joint_shard/transforms/regionizer.h"
 #include "shardy/dialect/sdy/ir/utils.h"
+
+namespace joint_shard {
 
 namespace {
 bool sameMesh(mlir::sdy::TensorShardingAttr sharding, const MeshContext& mesh) {
@@ -241,3 +244,5 @@ BoundaryEnumeration enumerateBoundaryStates(const Region& region,
   visit(0);
   return result;
 }
+
+}  // namespace joint_shard

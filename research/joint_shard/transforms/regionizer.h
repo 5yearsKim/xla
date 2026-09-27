@@ -8,6 +8,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
+namespace joint_shard {
+
 // A borrowed view: the source function must remain alive and unmodified while
 // its regions are imported/evaluated. Interfaces have deterministic SSA order.
 struct Region {
@@ -39,5 +41,7 @@ class Regionizer {
  private:
   RegionizerOptions options_;
 };
+
+}  // namespace joint_shard
 
 #endif

@@ -7,12 +7,14 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "cxxopts.hpp"
+#include "research/joint_shard/reporting/reports.h"
 #include "research/joint_shard/tools/rewrite_cli_options.h"
 #include "research/joint_shard/transforms/rewrite_regions.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 
 int main(int argc, char** argv) {
+  using namespace joint_shard;
   try {
     cxxopts::Options cli(
         "parse_stablehlo",
@@ -57,7 +59,7 @@ int main(int argc, char** argv) {
     TensorRewriteReport report;
     if (mlir::failed(rewriteUnconstrainedRegions(*module, options, &report)))
       return 1;
-    if (show_report) llvm::errs() << report.str();
+    if (show_report) llvm::errs() << formatReport(report);
     module->print(llvm::outs());
     llvm::outs() << "\n";
   } catch (const std::exception& error) {

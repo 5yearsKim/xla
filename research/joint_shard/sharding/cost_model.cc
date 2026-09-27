@@ -9,6 +9,8 @@
 #include "shardy/dialect/sdy/ir/utils.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
+namespace joint_shard {
+
 namespace {
 std::optional<double> elements(mlir::Type type) {
   auto tensor = llvm::dyn_cast<mlir::RankedTensorType>(type);
@@ -170,3 +172,5 @@ Cost CostModel::estimate(mlir::ModuleOp module,
   }
   return result;
 }
+
+}  // namespace joint_shard

@@ -11,6 +11,8 @@
 #include "eggc/expr.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensorlang.h"
 
+namespace joint_shard {
+
 class StableHloExporter {
  public:
   StableHloExporter(mlir::OpBuilder& builder, mlir::Location loc,
@@ -31,5 +33,7 @@ class StableHloExporter {
   std::vector<mlir::Value> values_;
   std::vector<mlir::RankedTensorType> types_;
 };
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_EXPORTER_H_

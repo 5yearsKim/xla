@@ -8,6 +8,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "research/joint_shard/bridge/stablehlo_importer.h"
 
+namespace joint_shard {
+
 namespace {
 struct NodeHash {
   size_t operator()(const TensorNode& node) const { return node.hash(); }
@@ -63,7 +65,6 @@ SaturatedRegion saturateRegion(const Region& region,
     result.original.output_roots.push_back(importer.originalRoot(value));
   }
   result.original.name = "original";
-  result.original.is_original = true;
   result.original.expression = importer.originalExpression();
   result.report = eggc::run(*result.graph, rules, options.runner);
   if (options.print_egraph) {
@@ -139,3 +140,5 @@ std::vector<Candidate> extractCandidates(const SaturatedRegion& saturated,
   append(ExtractionProfile::Memory, TensorExtractorMode::Tree, "memory");
   return candidates;
 }
+
+}  // namespace joint_shard

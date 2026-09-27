@@ -10,27 +10,37 @@ No descriptor table, operator-string encoding, or TensorLang dependency in
 | `tensorlang.h/.cc` | Native nodes, typed semantic attrs, shared operator schema, equality/hash |
 | `tensor_analysis.h/.cc` | Standalone inference and monotone e-class type/constant facts |
 | `op_properties.h/.cc` | Candidate properties by OpKind and contextual decisions with rejection reasons |
-| `semantic_rewrite.cc` | DSL parser, validation, bounded streaming matcher, complete RHS preparation |
+| `semantic_rewrite.cc` | Public DSL entry points, file loading, embedded default rules |
+| `semantic_rule_parser.cc` | DSL parsing and structural validation |
+| `semantic_rule_matcher.cc` | Bounded streaming matching and value predicates |
+| `semantic_rule_application.cc` | Property checks, complete RHS preparation and rule application |
+| `semantic_rule_internal.h` | Private AST, binding and search contracts |
 | `tensor.rules` | Default declarative rules, embedded into the library during Bazel builds |
 | `attribute_rewrites.cc` | Computed-attribute shape and dot rewrites |
-| `tensor_rewrites.h/.cc` | Public rule APIs and a small ordinary-pattern example |
+| `tensor_rewrites.h` | Public semantic/attribute rule APIs and diagnostic types |
 | `../stablehlo_importer.cc`, `../stablehlo_exporter.cc` | Conservative MLIR admission and typed round trips |
 | `../../transforms/rewrite_regions.cc` | Multi-output region sessions, saturation, shared extraction/export |
-| `../../sharding/shardy_runner.cc` | Shardy snapshots and candidate cost estimates |
+| `../../sharding/shardy_runner.cc` | Shardy stage execution and optional snapshots |
+| `../../sharding/cost_model.cc` | Per-device optimizer time estimates |
+| `../../sharding/module_statistics.cc` | Optional global work/payload diagnostics |
+
+All C++ APIs use the `joint_shard` namespace.
 
 ## Node and inference contracts
 
 ```cpp
-TensorNode node{OpKind::Transpose, TransposeAttrs{{0, 2, 1}}, {x}};
+joint_shard::TensorNode node{joint_shard::OpKind::Transpose,
+                            joint_shard::TransposeAttrs{{0, 2, 1}}, {x}};
 ```
 
 `op`, `attrs`, and operands determine identity. `matches` compares kind, attrs,
 and arity while ignoring operand IDs. MLIR handles in attrs are immutable and
 context-owned; retain the context throughout graph use and export.
 
-`opSchema` / `lookupOpSchema` provide names, arities, and whether a concrete DSL
-operator can use `NoAttrs`. Add new operations here and implement attribute
-validation, inference, importer, and exporter together.
+`opSchemas` / `opSchema` / `lookupOpSchema` provide names, arities, and whether
+a concrete DSL operator can use `NoAttrs`. Add new operations here and implement attribute
+validation, inference, importer, and exporter together. Property-indexed semantic
+search iterates registered schemas rather than relying on enum ordering.
 
 `inferTensorNode(node, operandFacts)` returns **Valid**, **Unknown**, or
 **Invalid**, with an explanation. It does not access or mutate an e-graph.

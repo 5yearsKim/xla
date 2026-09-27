@@ -5,9 +5,9 @@ filegroup(
         "dot_contracting.mlir",
         "dot_gather.mlir",
         "dot_general.mlir",
-        "scaling_dot.mlir",
-        "pair_scaling_dot.mlir",
         "pair_boundary_rewrite.mlir",
+        "pair_scaling_dot.mlir",
+        "scaling_dot.mlir",
     ],
     visibility = ["//research/joint_shard:__subpackages__"],
 )

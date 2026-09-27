@@ -7,10 +7,14 @@
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Parser/Parser.h"
 #include "cxxopts.hpp"
+#include "research/joint_shard/reporting/artifact_writer.h"
+#include "research/joint_shard/reporting/reports.h"
 #include "research/joint_shard/search/region_optimizer.h"
 #include "research/joint_shard/tools/rewrite_cli_options.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
+
+namespace joint_shard {
 
 namespace {
 size_t positive(std::string_view text) {
@@ -40,7 +44,10 @@ double number(std::string_view text) {
 }
 }  // namespace
 
+}  // namespace joint_shard
+
 int main(int argc, char** argv) {
+  using namespace joint_shard;
   try {
     cxxopts::Options cli("summarize_regions",
                          "Search bounded sharding plans for MLIR regions.");
@@ -96,6 +103,7 @@ int main(int argc, char** argv) {
     }
 
     RegionOptimizerOptions options;
+    std::string dump_directory;
     for (const cxxopts::KeyValue& argument : parsed.arguments()) {
       const std::string& name = argument.key();
       const std::string& value = argument.value();
@@ -128,7 +136,7 @@ int main(int argc, char** argv) {
       else if (name == "mesh")
         options.mesh_name = value;
       else if (name == "dump-dir")
-        options.dump_directory = value;
+        dump_directory = value;
       else if (name == "data-axis")
         options.layouts.data_axis = value;
       else if (name == "model-axis")
@@ -175,8 +183,9 @@ int main(int argc, char** argv) {
     auto module = mlir::parseSourceFile<mlir::ModuleOp>(
         parsed["input"].as<std::string>(), &context);
     if (!module) return 1;
-    auto report = summarizeRegions(*module, options);
-    llvm::outs() << report.str();
+    ArtifactWriter artifacts(dump_directory);
+    auto report = summarizeRegions(*module, options, artifacts.observer());
+    llvm::outs() << formatReport(report);
   } catch (const std::exception& error) {
     llvm::errs() << error.what() << '\n';
     return 1;

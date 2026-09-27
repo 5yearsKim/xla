@@ -5,6 +5,8 @@
 #include "research/joint_shard/sharding/boundary_state.h"
 #include "research/joint_shard/sharding/cost_model.h"
 
+namespace joint_shard {
+
 // Inlines already lowered artifacts without rerunning propagation or changing
 // their collective decisions. The mesh and exact boundary remain authoritative.
 class PlanMaterializer {
@@ -25,4 +27,6 @@ class PlanMaterializer {
   mlir::func::FuncOp function_;
   mlir::OpBuilder builder_;
 };
+}  // namespace joint_shard
+
 #endif

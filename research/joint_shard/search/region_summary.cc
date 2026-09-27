@@ -1,9 +1,9 @@
 #include "research/joint_shard/search/region_summary.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <stdexcept>
+
+namespace joint_shard {
 
 void RegionSummary::record(size_t candidate_id, const BoundaryState& boundary,
                            EvaluationResult result) {
@@ -14,29 +14,29 @@ void RegionSummary::record(size_t candidate_id, const BoundaryState& boundary,
   }
   ++feasible_plans;
   if (!result.cost.known()) ++unknown_cost_plans;
-  plans.push_back({candidate_id, boundary, result.cost,
-                   result.snapshots.empty()
-                       ? ""
-                       : std::move(result.snapshots.back().mlir)});
+  auto previous = std::find_if(
+      plans.begin(), plans.end(),
+      [&](const RegionPlan& plan) { return plan.boundary == boundary; });
+  bool better = previous == plans.end();
+  if (!better)
+    better = result.cost.known() &&
+             (!previous->cost.known() ||
+              result.cost.total() < previous->cost.total() ||
+              (result.cost.total() == previous->cost.total() &&
+               candidate_id < previous->candidate_id));
+  if (!better) return;
+  RegionPlan winner{candidate_id, boundary, result.cost,
+                    std::move(result.lowered_mlir)};
+  if (previous == plans.end())
+    plans.push_back(std::move(winner));
+  else
+    *previous = std::move(winner);
 }
-void RegionSummary::keepBestPerBoundary() {
-  std::map<std::string, RegionPlan> best;
-  for (auto& plan : plans) {
-    auto key = plan.boundary.key();
-    auto found = best.find(key);
-    bool better = found == best.end();
-    if (!better) {
-      const auto& previous = found->second;
-      better =
-          plan.cost.known() && (!previous.cost.known() ||
-                                plan.cost.total() < previous.cost.total() ||
-                                (plan.cost.total() == previous.cost.total() &&
-                                 plan.candidate_id < previous.candidate_id));
-    }
-    if (better) best.insert_or_assign(std::move(key), std::move(plan));
-  }
-  plans.clear();
-  for (auto& [key, plan] : best) plans.push_back(std::move(plan));
+void RegionSummary::finalizePlans() {
+  std::sort(plans.begin(), plans.end(),
+            [](const RegionPlan& a, const RegionPlan& b) {
+              return a.boundary.key() < b.boundary.key();
+            });
   best_boundary_plans = plans.size();
   frontier.clear();
   dominance.clear();
@@ -96,42 +96,4 @@ void pruneDominatedStates(RegionSummary& summary,
   summary.frontier = std::move(retained);
 }
 
-std::string RegionSummary::str() const {
-  std::ostringstream out;
-  out << "Region " << id << "\n========\nOperations: " << operations
-      << "\nInputs: " << interface.inputs.size()
-      << "\nOutputs: " << interface.outputs.size()
-      << "\nCandidates extracted: " << candidates.size()
-      << "\nBoundary states evaluated: " << boundaries_evaluated
-      << "\nEvaluations: " << evaluations
-      << "\nBefore best-per-boundary: " << feasible_plans << " plans"
-      << "\nAfter best-per-boundary: " << best_boundary_plans << " plans"
-      << "\nAfter reshard dominance: " << frontier.size() << " plans"
-      << "\nUnknown-cost evaluations: " << unknown_cost_plans
-      << "\nOversized protected region: " << oversized
-      << "\nBoundary search truncated: " << boundary_search_truncated << '\n';
-  for (const auto& [reason, count] : failures)
-    out << "Rejected: " << reason << " count=" << count << '\n';
-  for (const auto& candidate : candidates)
-    out << "Candidate R" << candidate.id << ": " << candidate.name << '\n';
-  out << "\nBoundary | Rewrite | Compute(us) | Comm(us) | Total(us)\n";
-  out << std::setprecision(12);
-  for (auto id : frontier) {
-    const auto& plan = plans.at(id);
-    out << "P" << id << " " << plan.boundary.key() << " | R"
-        << plan.candidate_id << " | ";
-    if (plan.cost.known())
-      out << plan.cost.compute << " | " << plan.cost.communication << " | "
-          << plan.cost.total();
-    else
-      out << "unknown | unknown | unknown";
-    out << '\n';
-  }
-  for (const auto& witness : dominance)
-    out << "Pruned P" << witness.removed_id << " " << witness.removed.key()
-        << " via P" << witness.replacement_id << " "
-        << witness.replacement.key()
-        << " adapters_us=" << witness.adapters.total()
-        << " replacement_total_us=" << witness.replacement_total << '\n';
-  return out.str();
-}
+}  // namespace joint_shard

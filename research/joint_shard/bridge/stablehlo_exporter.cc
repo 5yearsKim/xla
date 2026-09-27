@@ -6,6 +6,8 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
+namespace joint_shard {
+
 mlir::Value StableHloExporter::exportExpr(const TensorRecExpr& expr,
                                           std::size_t node) {
   return exportRoots(expr, {node}).front();
@@ -114,3 +116,5 @@ mlir::Value StableHloExporter::exportNode(const TensorRecExpr& expr,
   state.addOperands(operands);
   return values_[index] = builder_.create(state)->getResult(0);
 }
+
+}  // namespace joint_shard

@@ -1,11 +1,12 @@
 #ifndef RESEARCH_JOINT_SHARD_TRANSFORMS_REWRITE_OPTIONS_H_
 #define RESEARCH_JOINT_SHARD_TRANSFORMS_REWRITE_OPTIONS_H_
 #include <string>
-#include <string_view>
 
 #include "eggc/runner.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
 #include "research/joint_shard/transforms/tensor_extraction.h"
+
+namespace joint_shard {
 
 struct TensorRewriteOptions {
   std::string rules_file;     // Empty uses the embedded tensor.rules.
@@ -29,7 +30,6 @@ struct TensorRewriteOptions {
     return limits;
   }();
 };
-bool parseTensorRewriteOption(std::string_view argument,
-                              TensorRewriteOptions& options);
-std::string_view tensorRewriteOptionHelp();
+}  // namespace joint_shard
+
 #endif

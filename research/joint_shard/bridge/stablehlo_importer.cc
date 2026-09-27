@@ -8,6 +8,8 @@
 #include "mlir/IR/Operation.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
+namespace joint_shard {
+
 namespace {
 // Derived XLA layout/debug hints are deliberately recomputed by downstream
 // lowering. Unknown metadata and shardings remain hard rewrite boundaries.
@@ -198,3 +200,5 @@ eggc::Id StableHloImporter::importValue(mlir::Value value) {
   cache_[value] = id;
   return id;
 }
+
+}  // namespace joint_shard

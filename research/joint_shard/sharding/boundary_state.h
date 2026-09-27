@@ -1,13 +1,21 @@
 #ifndef RESEARCH_JOINT_SHARD_SHARDING_BOUNDARY_STATE_H_
 #define RESEARCH_JOINT_SHARD_SHARDING_BOUNDARY_STATE_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "research/joint_shard/transforms/regionizer.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Types.h"
 #include "shardy/dialect/sdy/ir/dialect.h"
+
+namespace joint_shard {
+struct Region;
 
 struct MeshContext {
   std::string name;
@@ -58,5 +66,7 @@ BoundaryEnumeration enumerateBoundaryStates(const Region& region,
                                             size_t max_states = 256);
 bool validExactSharding(TensorSharding sharding, mlir::RankedTensorType type,
                         const MeshContext& mesh);
+
+}  // namespace joint_shard
 
 #endif

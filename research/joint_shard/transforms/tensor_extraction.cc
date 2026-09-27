@@ -6,6 +6,8 @@
 #include <span>
 #include <stdexcept>
 
+namespace joint_shard {
+
 namespace {
 size_t saturatedMultiply(size_t a, size_t b) {
   const auto max = std::numeric_limits<size_t>::max() / 4;
@@ -145,3 +147,5 @@ std::vector<TensorRecExpr> extractTensorRoots(
   }
   return expressions;
 }
+
+}  // namespace joint_shard

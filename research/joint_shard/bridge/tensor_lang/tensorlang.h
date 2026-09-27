@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include "eggc/expr.hpp"
 #include "eggc/language.hpp"
 #include "eggc/pattern.hpp"
+
+namespace joint_shard {
 
 enum class OpKind {
   Input,
@@ -31,7 +34,6 @@ enum class OpKind {
   Sqrt,
   Tanh,
   DotGeneral,
-  Convolution,
   Reduce,
   BroadcastInDim,
   Reshape,
@@ -68,8 +70,6 @@ inline const char* stableHloName(OpKind kind) {
       return "stablehlo.tanh";
     case OpKind::DotGeneral:
       return "stablehlo.dot_general";
-    case OpKind::Convolution:
-      return "stablehlo.convolution";
     case OpKind::Reduce:
       return "stablehlo.reduce";
     case OpKind::BroadcastInDim:
@@ -177,11 +177,14 @@ struct OpSchema {
   unsigned arity;
   bool attribute_free;
 };
+std::span<const OpSchema> opSchemas();
 const OpSchema* opSchema(OpKind op);
 const OpSchema* lookupOpSchema(std::string_view name);
 bool validNodeSchema(const TensorNode& node);
 
 using TensorRecExpr = eggc::RecExpr<TensorNode>;
 using TensorPattern = eggc::Pattern<TensorNode>;
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_TENSORLANG_H_

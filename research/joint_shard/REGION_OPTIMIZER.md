@@ -53,14 +53,14 @@ explicit numerical policy.
 | `search/region_summary` | Preserved best-per-boundary table, frontier IDs and dominance witnesses |
 | `search/pair_composer` | Joint pair search, dominance resolution and materialization orchestration |
 | `sharding/plan_materializer` | Mesh-checked inlining of lowered artifacts and cost verification |
-| `search/region_optimizer` | Orchestration and artifacts |
+| `search/region_optimizer` | Orchestration, structured results and synchronous observers |
+| `reporting/reports` | Human-readable report formatting |
+| `reporting/artifact_writer` | Candidate, snapshot, region and pair artifact output |
 
 `parse_stablehlo` remains a bridge/rewrite inspection tool. Its mutation path
 uses the same saturation and shared-root export helpers as the optimizer.
 `run_shardy` only inspects an already annotated input through propagation,
-reshard insertion and collective conversion. The previous whole-module
-`--round-trip`/`--candidates` comparison and lexicographic winner selection were
-removed.
+reshard insertion and collective conversion.
 
 ## Regions and extraction
 
@@ -171,11 +171,13 @@ Communication uses local payloads: all-gather and reduce-scatter use the payload
 difference, all-reduce uses a ring-volume approximation, all-to-all uses its
 axis-group volume, and collective-permute uses the input payload. This is still
 a simple model without topology, overlap, scheduling, memory pressure or device
-calibration. The older global payload/work counters remain snapshot diagnostics,
-not optimizer selection criteria.
+calibration. The optional global payload/work counters in `ModuleStatistics`
+remain diagnostics, not optimizer selection criteria.
 
-For each exact boundary, the cheapest known candidate wins. Equal costs prefer
-the original (candidate 0), then the smaller candidate ID. A known estimate can
+For each exact boundary, the cheapest known candidate wins. Selection happens
+incrementally during evaluation, so losing lowered artifacts are released
+immediately. `finalizePlans` orders the resulting table and assigns plan IDs.
+Equal costs prefer the original (candidate 0), then the smaller candidate ID. A known estimate can
 replace an unknown estimate; an unknown estimate cannot displace a known one.
 Unknown plans remain inspectable but cannot justify dominance or win pair
 selection. After best-per-boundary selection, plans receive stable `P` IDs.
@@ -199,7 +201,9 @@ the same lowering. Identity adapters have no operations and zero cost.
 
 ## Artifacts and scope
 
-With `--dump-dir=PATH`, each region receives:
+The library captures only final evaluation IR by default. The CLI connects an
+`ArtifactWriter` through `OptimizationObserver` to capture all stages when
+`--dump-dir=PATH` is supplied. Each region receives:
 
 ```text
 region_0/

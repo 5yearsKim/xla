@@ -10,6 +10,8 @@
 #include "eggc/extract.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensorlang.h"
 
+namespace joint_shard {
+
 // Semantic value facts only. Candidate layouts, cost, and intrinsic operator
 // properties do not belong here. A null type means unknown analysis
 // information, distinct from a ranked tensor type containing dynamic
@@ -43,5 +45,7 @@ struct TensorAnalysis {
 using TensorExtractor = eggc::Extractor<TensorNode, TensorAnalysis>;
 
 const TensorFacts& tensorFacts(const TensorEGraph& graph, eggc::Id id);
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_TENSOR_ANALYSIS_H_

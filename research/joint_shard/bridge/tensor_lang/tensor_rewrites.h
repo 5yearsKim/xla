@@ -10,14 +10,9 @@
 #include "research/joint_shard/bridge/tensor_lang/op_properties.h"
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 
-using TensorCondition = eggc::Condition<TensorNode, TensorAnalysis>;
-using TensorRewrite = eggc::Rewrite<TensorNode, TensorAnalysis>;
-using TensorSubstitution = eggc::Substitution;
+namespace joint_shard {
 
-TensorCondition sameTensorType(std::string lhs, std::string rhs);
-// Ordinary patterns match complete operator attrs; guards inspect tensor facts.
-std::vector<TensorRewrite> buildTensorRewrites(
-    NumericalPolicy policy = NumericalPolicy::PreserveEvaluation);
+using TensorRewrite = eggc::Rewrite<TensorNode, TensorAnalysis>;
 
 struct SemanticRuleStats {
   std::size_t node_visits = 0;
@@ -53,4 +48,6 @@ std::vector<TensorRewrite> loadSemanticRulesFile(
     std::string_view path,
     NumericalPolicy policy = NumericalPolicy::PreserveEvaluation,
     SemanticRuleOptions options = {});
+}  // namespace joint_shard
+
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_TENSOR_LANG_TENSOR_REWRITES_H_

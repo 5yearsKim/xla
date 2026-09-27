@@ -3,6 +3,8 @@
 
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
 
+namespace joint_shard {
+
 namespace {
 bool identity(const std::vector<int64_t>& p) {
   for (size_t i = 0; i < p.size(); ++i)
@@ -132,3 +134,5 @@ std::vector<TensorRewrite> buildAttributeRewrites() {
             return true;
           }}};
 }
+
+}  // namespace joint_shard

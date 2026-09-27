@@ -12,6 +12,8 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
 #include "research/joint_shard/transforms/rewrite_options.h"
 
+namespace joint_shard {
+
 struct TensorRewriteReport {
   std::size_t regions = 0;
   std::size_t imported_operations = 0;
@@ -20,7 +22,6 @@ struct TensorRewriteReport {
   std::map<std::string, SemanticRuleStats> rules;
   std::vector<eggc::RunReport> runs;
   std::vector<TensorExtractionReport> extractions;
-  std::string str() const;
 };
 // Supported contiguous islands use one graph and one export cache per island.
 // Fixed shardings, constraints, unknown metadata, and unsupported regions are
@@ -28,4 +29,6 @@ struct TensorRewriteReport {
 mlir::LogicalResult rewriteUnconstrainedRegions(
     mlir::ModuleOp module, const TensorRewriteOptions& options = {},
     TensorRewriteReport* report = nullptr);
+}  // namespace joint_shard
+
 #endif

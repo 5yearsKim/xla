@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//research/joint_shard:__subpackages__"])
 
@@ -19,7 +20,8 @@ cc_library(
     hdrs = ["region_summary.h"],
     deps = [
         ":region_interface",
-        "//research/joint_shard/sharding:region_evaluator",
+        "//research/joint_shard/sharding:evaluation_result",
+        "//research/joint_shard/transforms:candidate",
     ],
 )
 
@@ -40,12 +42,36 @@ cc_library(
     srcs = ["region_optimizer.cc"],
     hdrs = ["region_optimizer.h"],
     deps = [
+        ":optimization_observer",
         ":pair_composer",
         "//research/joint_shard/bridge:stablehlo_importer",
+        "//research/joint_shard/egg-c:eggc",
         "//research/joint_shard/sharding:region_evaluator",
+        "//research/joint_shard/sharding:shardy_runner",
         "//research/joint_shard/transforms:region_candidates",
+        "//research/joint_shard/transforms:regionizer",
+        "//research/joint_shard/transforms:rewrite_options",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_test(
+    name = "region_summary_test",
+    srcs = ["region_summary_test.cc"],
+    deps = [
+        ":region_summary",
+        "//research/joint_shard/tests/support:region_test",
+        "@com_google_googletest//:gtest_main",
+    ],
+    linkstatic = True,
+)
+
+cc_library(
+    name = "optimization_observer",
+    hdrs = ["optimization_observer.h"],
+    deps = [
         "@llvm-project//mlir:IR",
     ],
 )

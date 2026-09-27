@@ -5,19 +5,14 @@
 #include <string>
 #include <vector>
 
+#include "research/joint_shard/transforms/candidate.h"
 #include "research/joint_shard/transforms/regionizer.h"
 #include "research/joint_shard/transforms/rewrite_options.h"
 
+namespace joint_shard {
+
 using CompiledTensorRules = eggc::CompiledRules<TensorNode, TensorAnalysis>;
 CompiledTensorRules compileTensorRules(const TensorRewriteOptions& options);
-
-struct Candidate {
-  size_t id = 0;
-  std::string name;
-  TensorRecExpr expression;
-  std::vector<size_t> output_roots;
-  bool is_original = false;
-};
 
 struct SaturatedRegion {
   std::unique_ptr<TensorEGraph> graph;
@@ -36,5 +31,7 @@ Candidate mergeExtractedRoots(const std::vector<TensorRecExpr>& roots,
 std::vector<Candidate> extractCandidates(const SaturatedRegion& saturated,
                                          const TensorRewriteOptions& options,
                                          size_t max_candidates = 32);
+
+}  // namespace joint_shard
 
 #endif

@@ -8,6 +8,8 @@
 #include "eggc/dag_extract.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 
+namespace joint_shard {
+
 enum class ExtractionProfile { Compute, Depth, Memory };
 enum class TensorExtractorMode { Auto, Tree };
 
@@ -33,5 +35,7 @@ std::vector<TensorRecExpr> extractTensorRoots(
     const TensorEGraph& graph, const std::vector<eggc::Id>& roots,
     ExtractionProfile profile, TensorExtractorMode mode,
     const eggc::DagOptions& budgets, TensorExtractionReport& report);
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_TRANSFORMS_TENSOR_EXTRACTION_H_

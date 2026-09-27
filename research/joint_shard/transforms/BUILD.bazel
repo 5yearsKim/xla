@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//research/joint_shard:__subpackages__"])
 
@@ -17,9 +18,9 @@ cc_library(
     srcs = ["rewrite_regions.cc"],
     hdrs = ["rewrite_regions.h"],
     deps = [
-        ":tensor_extraction",
-        ":rewrite_options",
         ":region_candidates",
+        ":rewrite_options",
+        ":tensor_extraction",
         "//research/joint_shard/bridge/tensor_lang:tensorlang",
         "//research/joint_shard/bridge:stablehlo_exporter",
         "//research/joint_shard/bridge:stablehlo_importer",
@@ -34,7 +35,6 @@ cc_library(
 
 cc_library(
     name = "rewrite_options",
-    srcs = ["rewrite_options.cc"],
     hdrs = ["rewrite_options.h"],
     deps = [
         ":tensor_extraction",
@@ -42,6 +42,7 @@ cc_library(
         "//research/joint_shard/egg-c:eggc",
     ],
 )
+
 cc_library(
     name = "regionizer",
     srcs = ["regionizer.cc"],
@@ -53,17 +54,60 @@ cc_library(
         "@llvm-project//mlir:IR",
     ],
 )
+
 cc_library(
     name = "region_candidates",
     srcs = ["region_candidates.cc"],
     hdrs = ["region_candidates.h"],
     deps = [
+        ":candidate",
         ":regionizer",
         ":rewrite_options",
         ":tensor_extraction",
-        "//research/joint_shard/bridge:stablehlo_importer",
         "//research/joint_shard/bridge/tensor_lang:tensorlang",
+        "//research/joint_shard/bridge:stablehlo_importer",
         "//research/joint_shard/egg-c:eggc",
         "@llvm-project//llvm:Support",
     ],
+)
+
+cc_library(
+    name = "candidate",
+    hdrs = ["candidate.h"],
+    deps = [
+        "//research/joint_shard/bridge/tensor_lang:tensorlang",
+    ],
+)
+
+cc_test(
+    name = "tensor_extraction_test",
+    srcs = ["tensor_extraction_test.cc"],
+    deps = [
+        ":tensor_extraction",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:IR",
+    ],
+    linkstatic = True,
+)
+
+cc_test(
+    name = "regionizer_test",
+    srcs = ["regionizer_test.cc"],
+    deps = [
+        ":regionizer",
+        "//research/joint_shard/tests/support:region_test",
+        "@com_google_googletest//:gtest_main",
+    ],
+    linkstatic = True,
+)
+
+cc_test(
+    name = "region_candidates_test",
+    srcs = ["region_candidates_test.cc"],
+    deps = [
+        ":region_candidates",
+        "//research/joint_shard/tests/support:region_test",
+        "@com_google_googletest//:gtest_main",
+    ],
+    linkstatic = True,
 )

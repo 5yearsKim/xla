@@ -5,31 +5,27 @@
 #include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
 #include "research/joint_shard/sharding/shardy_runner.h"
+#include "research/joint_shard/tests/support/mlir_test.h"
 #include "research/joint_shard/transforms/rewrite_regions.h"
 #include "shardy/dialect/sdy/ir/dialect.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
+namespace joint_shard {
+
 namespace {
 
-class FixedShardingTest : public ::testing::Test {
+class FixedShardingTest : public test::MlirTest {
  protected:
-  FixedShardingTest() {
-    mlir::DialectRegistry registry;
-    mlir::stablehlo::registerAllDialects(registry);
-    mlir::sdy::registerAllDialects(registry);
-    context_.appendDialectRegistry(registry);
-  }
   mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef text) {
-    return mlir::parseSourceString<mlir::ModuleOp>(text, &context_);
+    return parseUnchecked(text);
   }
   TensorRewriteOptions strictOptions() {
     TensorRewriteOptions options;
     options.numerical_policy = NumericalPolicy::PreserveEvaluation;
     return options;
   }
-  mlir::MLIRContext context_;
 };
 
 TEST_F(FixedShardingTest, RewritesBothSidesWithoutCrossingAnnotatedOperation) {
@@ -160,14 +156,18 @@ module attributes {mhlo.num_partitions = 2 : i32} {
   auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
   auto argAttrs = function.getArgAttrDict(1);
   auto resultAttrs = function.getResultAttrDict(0);
+  ShardyRunOptions run_options;
+  run_options.collect_statistics = true;
   ShardyRunner runner;
-  ASSERT_TRUE(mlir::succeeded(runner.run(*module)));
+  ASSERT_TRUE(mlir::succeeded(runner.run(*module, run_options)));
   function = module->lookupSymbol<mlir::func::FuncOp>("main");
   ASSERT_TRUE(function);
   EXPECT_EQ(function.getArgAttrDict(1), argAttrs);
   EXPECT_EQ(function.getResultAttrDict(0), resultAttrs);
   EXPECT_TRUE(module->lookupSymbol<mlir::sdy::MeshOp>("custom"));
-  EXPECT_GT(runner.snapshots().back().communicationOps.at("sdy.all_gather"), 0);
+  EXPECT_GT(runner.snapshots().back().statistics->communication_ops.at(
+                "sdy.all_gather"),
+            0);
 }
 
 TEST_F(FixedShardingTest, ConvertsUseScopedConstraintToCommunication) {
@@ -183,9 +183,13 @@ module {
   ASSERT_TRUE(module);
   ASSERT_TRUE(
       mlir::succeeded(rewriteUnconstrainedRegions(*module, strictOptions())));
+  ShardyRunOptions run_options;
+  run_options.collect_statistics = true;
   ShardyRunner runner;
-  ASSERT_TRUE(mlir::succeeded(runner.run(*module)));
-  EXPECT_GT(runner.snapshots().back().communicationOps.at("sdy.all_gather"), 0);
+  ASSERT_TRUE(mlir::succeeded(runner.run(*module, run_options)));
+  EXPECT_GT(runner.snapshots().back().statistics->communication_ops.at(
+                "sdy.all_gather"),
+            0);
   module->walk([](mlir::sdy::ShardingConstraintOp) {
     ADD_FAILURE() << "unlowered constraint";
   });
@@ -198,8 +202,12 @@ module attributes {mhlo.num_partitions = 4 : i32} {
   func.func @main(%a: tensor<8xf32>) -> tensor<8xf32> { return %a : tensor<8xf32> }
 })mlir");
   ASSERT_TRUE(module);
+  ShardyRunOptions run_options;
+  run_options.collect_statistics = true;
   ShardyRunner runner;
-  EXPECT_TRUE(mlir::failed(runner.run(*module)));
+  EXPECT_TRUE(mlir::failed(runner.run(*module, run_options)));
 }
 
 }  // namespace
+
+}  // namespace joint_shard

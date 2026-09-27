@@ -1,12 +1,11 @@
 #include "research/joint_shard/search/pair_composer.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <stdexcept>
 
-#include "llvm/Support/raw_ostream.h"
 #include "research/joint_shard/sharding/plan_materializer.h"
+
+namespace joint_shard {
 
 ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
                                      PlanId requested, bool use_frontier,
@@ -178,24 +177,6 @@ std::vector<mlir::Value> inlineRegion(PlanMaterializer& builder,
     outputs[i] = adapt(builder, plan.output_adapters.at(i), outputs[i]);
   return outputs;
 }
-std::string typeText(mlir::Type type) {
-  std::string text;
-  llvm::raw_string_ostream out(text);
-  out << type;
-  return text;
-}
-std::string compact(const TensorSharding& layout) {
-  std::ostringstream out;
-  bool replicated = true;
-  auto dims = layout.attr.getDimShardings();
-  for (size_t i = 0; i < dims.size(); ++i)
-    for (auto axis : dims[i].getAxes()) {
-      if (!replicated) out << ",";
-      out << axis.getName().str() << ":d" << i;
-      replicated = false;
-    }
-  return replicated ? "R" : out.str();
-}
 }  // namespace
 std::string materializePair(const RegionSummary& a, const RegionSummary& b,
                             const PairInterface& interface,
@@ -214,59 +195,5 @@ std::string materializePair(const RegionSummary& a, const RegionSummary& b,
   auto bv = inlineRegion(builder, b, plan.b, std::move(bi));
   return builder.finish(bv, plan.cost, model);
 }
-std::string PairSummary::str() const {
-  std::ostringstream out;
-  out << "\nComposition " << a_region << " -> " << b_region << " ("
-      << (frontier_resolved ? "frontier-resolved" : "exact") << ")\n"
-      << "Pairs evaluated: " << evaluations << "; truncated: " << truncated
-      << "; shared layout rejections: " << shared_layout_rejections
-      << "; unknown cost rejections: " << unknown_cost_rejections << "\n"
-      << "External boundary winners: " << plans.size() << "\n"
-      << "Layouts: R=replicated, axis:dN=axis shards tensor dimension N. Costs "
-         "in us.\n";
-  for (size_t i = 0; i < interface.external.inputs.size(); ++i) {
-    auto type = typeText(interface.external.inputs[i].type);
-    out << "Input " << i << " = V" << interface.external.inputs[i].value << " "
-        << type << "\n";
-  }
-  for (size_t i = 0; i < interface.external.outputs.size(); ++i)
-    out << "Output " << i << " = V" << interface.external.outputs[i].value
-        << " " << typeText(interface.external.outputs[i].type) << "\n";
-  for (size_t i = 0; i < interface.a_inputs.size(); ++i)
-    out << "A input " << i << " <- external input " << interface.a_inputs[i]
-        << "\n";
-  for (size_t i = 0; i < interface.b_inputs.size(); ++i) {
-    out << "B input " << i << " <- ";
-    if (interface.b_inputs[i] < 0)
-      out << "A output 0";
-    else
-      out << "external input " << interface.b_inputs[i];
-    out << "\n";
-  }
-  out << "Intermediate V" << interface.intermediate.value << " "
-      << typeText(interface.intermediate.type) << " maps A output 0 -> B input "
-      << interface.intermediate_input << "\n";
-  out << std::setprecision(12);
-  for (size_t i = 0; i < plans.size(); ++i) {
-    const auto& p = plans[i];
-    out << "Selected " << i << ": inputs=[";
-    for (size_t j = 0; j < p.boundary.inputs.size(); ++j)
-      out << (j ? "," : "") << compact(p.boundary.inputs[j]);
-    out << "] outputs=[";
-    for (size_t j = 0; j < p.boundary.outputs.size(); ++j)
-      out << (j ? "," : "") << compact(p.boundary.outputs[j]);
-    out << "] A=P" << p.a.requested << "/implemented P" << p.a.implementation
-        << "(R" << p.a.candidate_id << ") B=P" << p.b.requested
-        << "/implemented P" << p.b.implementation << "(R" << p.b.candidate_id
-        << ") intermediate=" << compact(p.intermediate.from) << " -> "
-        << compact(p.intermediate.to) << " A=" << p.a.cost.total()
-        << " (core=" << p.a.core_cost.total()
-        << ",wrappers=" << p.a.adapters_cost.total()
-        << ") adapter=" << p.intermediate.cost.total()
-        << " B=" << p.b.cost.total() << " (core=" << p.b.core_cost.total()
-        << ",wrappers=" << p.b.adapters_cost.total()
-        << ") total=" << p.cost.total() << " compute=" << p.cost.compute
-        << " comm=" << p.cost.communication << "\n";
-  }
-  return out.str();
-}
+
+}  // namespace joint_shard

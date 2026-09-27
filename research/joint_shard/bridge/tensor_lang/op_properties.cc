@@ -4,6 +4,8 @@
 
 #include "llvm/Support/Casting.h"
 
+namespace joint_shard {
+
 NumericalPermissions numericalPermissions(NumericalPolicy policy) {
   if (policy == NumericalPolicy::AllowReassociation)
     return {true, true, true, true, true, true};
@@ -140,3 +142,5 @@ bool hasProperty(const TensorNode& node, const OpProperty& property,
                  const PropertyContext& context) {
   return queryProperty(node, property, context).allowed;
 }
+
+}  // namespace joint_shard

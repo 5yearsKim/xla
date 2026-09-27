@@ -3,6 +3,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "gtest/gtest.h"
 
+namespace joint_shard {
+
 namespace {
 class TensorExtractionTest : public ::testing::Test {
  protected:
@@ -178,3 +180,5 @@ TEST_F(TensorExtractionTest, OtherProfilesAndMultipleOutputsUseTree) {
   EXPECT_EQ(report.fallback, "multiple-outputs");
 }
 }  // namespace
+
+}  // namespace joint_shard

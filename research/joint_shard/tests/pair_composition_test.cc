@@ -6,31 +6,16 @@
 #include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
 #include "research/joint_shard/search/region_optimizer.h"
+#include "research/joint_shard/sharding/region_evaluator.h"
+#include "research/joint_shard/tests/support/mlir_test.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 
+namespace joint_shard {
+
 namespace {
-class PairCompositionTest : public ::testing::Test {
+class PairCompositionTest : public test::MlirTest {
  protected:
-  mlir::MLIRContext context;
-  PairCompositionTest() {
-    mlir::DialectRegistry registry;
-    mlir::stablehlo::registerAllDialects(registry);
-    mlir::sdy::registerAllDialects(registry);
-    context.appendDialectRegistry(registry);
-  }
-  mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef source) {
-    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-    if (!module || mlir::failed(mlir::verify(*module)))
-      throw std::runtime_error("invalid test fixture");
-    return module;
-  }
-  std::string print(mlir::ModuleOp module) {
-    std::string result;
-    llvm::raw_string_ostream out(result);
-    module.print(out);
-    return result;
-  }
   mlir::OwningOpRef<mlir::ModuleOp> chain() {
     auto module = mlir::parseSourceFile<mlir::ModuleOp>(
         "research/joint_shard/testdata/pair_scaling_dot.mlir", &context);
@@ -52,8 +37,8 @@ TEST_F(PairCompositionTest, JointSearchBeatsGreedyAndPreservesOuterState) {
   b.interface = {{{1, type}}, {{2, type}}};
   a.plans = {{0, {{r}, {tp}}, {1, 0, 0}, ""}, {1, {{r}, {r}}, {3, 0, 0}, ""}};
   b.plans = {{0, {{r}, {r}}, {1, 0, 0}, ""}, {1, {{tp}, {r}}, {4, 0, 0}, ""}};
-  a.keepBestPerBoundary();
-  b.keepBestPerBoundary();
+  a.finalizePlans();
+  b.finalizePlans();
   PairInterface interface;
   interface.external = {{{0, type}}, {{2, type}}};
   interface.intermediate = {1, type};
@@ -123,8 +108,8 @@ TEST_F(PairCompositionTest,
   a.plans = {{0, {{r, r}, {r}}, {1, 0, 0}, ""}};
   b.plans = {{0, {{r, tp}, {r}}, {1, 0, 0}, ""},
              {1, {{r, r}, {r}}, {2, 0, 0}, ""}};
-  a.keepBestPerBoundary();
-  b.keepBestPerBoundary();
+  a.finalizePlans();
+  b.finalizePlans();
   ReshardCostOracle oracle(mesh);
   auto composed =
       composePair(a, b, interface, [&](auto from, auto to, auto type) {
@@ -351,3 +336,5 @@ TEST_F(PairCompositionTest, RejectsNonadjacentAndMissingRegionRequests) {
                std::invalid_argument);
 }
 }  // namespace
+
+}  // namespace joint_shard

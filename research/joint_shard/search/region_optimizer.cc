@@ -1,49 +1,18 @@
 #include "research/joint_shard/search/region_optimizer.h"
 
-#include <sstream>
 #include <stdexcept>
 
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/Verifier.h"
 #include "research/joint_shard/bridge/stablehlo_importer.h"
+#include "research/joint_shard/sharding/region_evaluator.h"
+#include "research/joint_shard/sharding/shardy_runner.h"
+#include "research/joint_shard/transforms/region_candidates.h"
 
-namespace {
-const char* stopName(eggc::StopReason reason) {
-  switch (reason) {
-    case eggc::StopReason::Saturated:
-      return "saturated";
-    case eggc::StopReason::IterationLimit:
-      return "iteration-limit";
-    case eggc::StopReason::NodeLimit:
-      return "node-limit";
-    case eggc::StopReason::TimeLimit:
-      return "time-limit";
-    case eggc::StopReason::MatchLimit:
-      return "match-limit";
-    case eggc::StopReason::SearchLimit:
-      return "search-limit";
-    case eggc::StopReason::UserRequested:
-      return "user-requested";
-    case eggc::StopReason::MemoryLimit:
-      return "memory-limit";
-  }
-  return "unknown";
-}
-void dumpModule(mlir::ModuleOp module, const std::string& path) {
-  std::error_code error;
-  llvm::raw_fd_ostream out(path, error);
-  if (error)
-    throw std::runtime_error("cannot write " + path + ": " + error.message());
-  module.print(out);
-  out << '\n';
-  out.flush();
-  if (out.has_error()) throw std::runtime_error("failed to write " + path);
-}
-}  // namespace
+namespace joint_shard {
 
 OptimizationReport summarizeRegions(mlir::ModuleOp module,
-                                    const RegionOptimizerOptions& options) {
+                                    const RegionOptimizerOptions& options,
+                                    const OptimizationObserver& observer) {
   if (mlir::failed(mlir::verify(module)))
     throw std::invalid_argument("invalid input module");
   if (!options.max_candidates || !options.max_boundary_states ||
@@ -94,68 +63,34 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
             ["no compatible boundary layouts (check static shapes, mesh, and "
              "constraints)"] = 1;
       std::vector<mlir::OwningOpRef<mlir::ModuleOp>> prepared;
-      std::string regionDirectory;
-      if (!options.dump_directory.empty()) {
-        regionDirectory =
-            options.dump_directory + "/region_" + std::to_string(region.id);
-        if (auto error = llvm::sys::fs::create_directories(regionDirectory))
-          throw std::runtime_error(error.message());
-      }
       for (const auto& candidate : summary.candidates) {
         auto candidateModule =
             prepareCandidateModule(region, candidate, report.mesh);
-        if (!regionDirectory.empty())
-          dumpModule(*candidateModule, regionDirectory + "/candidate_" +
-                                           std::to_string(candidate.id) +
-                                           ".mlir");
+        if (observer.candidate_prepared)
+          observer.candidate_prepared(region.id, candidate.id,
+                                      *candidateModule);
         prepared.push_back(std::move(candidateModule));
       }
       for (size_t b = 0; b < boundaries.states.size(); ++b) {
         for (size_t c = 0; c < prepared.size(); ++c) {
           ShardyRunOptions runOptions;
-          if (!regionDirectory.empty())
-            runOptions.dumpDirectory = regionDirectory + "/boundary_" +
-                                       std::to_string(b) + "/candidate_" +
-                                       std::to_string(c);
+          if (observer.snapshot) {
+            runOptions.capture = SnapshotCapture::AllStages;
+            runOptions.on_snapshot = [&](const ShardySnapshot& snapshot) {
+              observer.snapshot(region.id, b, c, snapshot);
+            };
+          }
           summary.record(c, boundaries.states[b],
                          evaluator.evaluate(*prepared[c], boundaries.states[b],
                                             runOptions));
         }
       }
-      summary.keepBestPerBoundary();
+      summary.finalizePlans();
       pruneDominatedStates(
           summary,
           [&](const TensorSharding& from, const TensorSharding& to,
               mlir::Type type) { return oracle.estimate(from, to, type); });
-      if (!regionDirectory.empty()) {
-        std::error_code error;
-        llvm::raw_fd_ostream out(regionDirectory + "/summary.txt", error);
-        if (error) throw std::runtime_error(error.message());
-        out << summary.str();
-        out.flush();
-        if (out.has_error())
-          throw std::runtime_error("failed to write summary");
-        for (const auto& plan : summary.plans) {
-          llvm::raw_fd_ostream artifact(
-              regionDirectory + "/exact_P" + std::to_string(plan.id) + ".mlir",
-              error);
-          if (error) throw std::runtime_error(error.message());
-          artifact << plan.lowered_mlir;
-          artifact.flush();
-          if (artifact.has_error())
-            throw std::runtime_error("failed to write exact plan");
-        }
-        for (size_t p = 0; p < summary.frontier.size(); ++p) {
-          llvm::raw_fd_ostream artifact(
-              regionDirectory + "/frontier_" + std::to_string(p) + ".mlir",
-              error);
-          if (error) throw std::runtime_error(error.message());
-          artifact << summary.plans.at(summary.frontier[p]).lowered_mlir;
-          artifact.flush();
-          if (artifact.has_error())
-            throw std::runtime_error("failed to write frontier");
-        }
-      }
+      if (observer.region_completed) observer.region_completed(summary);
       report.regions.push_back(std::move(summary));
     }
   }
@@ -170,54 +105,15 @@ OptimizationReport summarizeRegions(mlir::ModuleOp module,
         [&](const TensorSharding& from, const TensorSharding& to,
             mlir::Type type) { return oracle.plan(from, to, type); },
         options.max_pair_evaluations, options.compose_pruned);
-    std::string directory;
-    if (!options.dump_directory.empty()) {
-      directory = options.dump_directory + "/pair_" + std::to_string(a) + "_" +
-                  std::to_string(b);
-      if (auto error = llvm::sys::fs::create_directories(directory))
-        throw std::runtime_error(error.message());
-    }
-    auto dumpText = [&](const std::string& name, const std::string& text) {
-      std::error_code error;
-      llvm::raw_fd_ostream out(directory + "/" + name, error);
-      if (error) throw std::runtime_error(error.message());
-      out << text;
-      out.flush();
-      if (out.has_error())
-        throw std::runtime_error("failed to write pair artifact");
-    };
     for (size_t i = 0; i < pair.plans.size(); ++i) {
       auto& plan = pair.plans[i];
       plan.lowered_mlir = materializePair(report.regions[a], report.regions[b],
                                           interface, plan, report.mesh, model);
-      if (!directory.empty()) {
-        auto prefix = "selected_" + std::to_string(i);
-        dumpText(prefix + ".mlir", plan.lowered_mlir);
-        dumpText(prefix + "_adapter.mlir",
-                 plan.intermediate.lowered_mlir.empty()
-                     ? "// Identity adapter: no operations, zero cost.\n"
-                     : plan.intermediate.lowered_mlir);
-      }
     }
-    if (!directory.empty()) dumpText("summary.txt", pair.str());
+    if (observer.pair_completed) observer.pair_completed(pair);
     report.compositions.push_back(std::move(pair));
   }
   return report;
 }
 
-std::string OptimizationReport::str() const {
-  std::ostringstream out;
-  out << "Joint rewrite-sharding region summaries\nMesh: " << mesh.name
-      << " devices=" << mesh.mesh.getTotalSize()
-      << "\nCosts are illustrative estimates in microseconds.\n";
-  for (const auto& [reason, count] : preserved_operations)
-    out << "Preserved boundary: " << reason << " count=" << count << '\n';
-  for (size_t i = 0; i < regions.size(); ++i) {
-    out << '\n' << regions[i].str();
-    const auto& run = saturation[i];
-    out << "Saturation iterations=" << run.iterations << " nodes=" << run.nodes
-        << " stop=" << stopName(run.reason) << '\n';
-  }
-  for (const auto& pair : compositions) out << pair.str();
-  return out.str();
-}
+}  // namespace joint_shard

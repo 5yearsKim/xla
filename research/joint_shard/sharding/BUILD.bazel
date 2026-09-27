@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//research/joint_shard:__subpackages__"])
 
@@ -7,7 +8,7 @@ cc_library(
     srcs = ["shardy_runner.cc"],
     hdrs = ["shardy_runner.h"],
     deps = [
-        "@stablehlo//:stablehlo_ops",
+        ":module_statistics",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -32,6 +33,7 @@ cc_library(
         "@shardy//shardy/dialect/sdy/ir:dialect",
     ],
 )
+
 cc_library(
     name = "cost_model",
     srcs = ["cost_model.cc"],
@@ -44,6 +46,7 @@ cc_library(
         "@stablehlo//:stablehlo_ops",
     ],
 )
+
 cc_library(
     name = "region_evaluator",
     srcs = ["region_evaluator.cc"],
@@ -51,9 +54,10 @@ cc_library(
     deps = [
         ":boundary_state",
         ":cost_model",
+        ":evaluation_result",
         ":shardy_runner",
-        "//research/joint_shard/transforms:region_candidates",
         "//research/joint_shard/bridge:stablehlo_exporter",
+        "//research/joint_shard/transforms:region_candidates",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -73,5 +77,59 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@shardy//shardy/dialect/sdy/ir:dialect",
+    ],
+)
+
+cc_library(
+    name = "evaluation_result",
+    hdrs = ["evaluation_result.h"],
+    deps = [
+        ":boundary_state",
+        ":cost_model",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_library(
+    name = "module_statistics",
+    srcs = ["module_statistics.cc"],
+    hdrs = ["module_statistics.h"],
+    deps = [
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_test(
+    name = "boundary_state_test",
+    srcs = ["boundary_state_test.cc"],
+    deps = [
+        ":boundary_state",
+        "//research/joint_shard/tests/support:region_test",
+        "@com_google_googletest//:gtest_main",
+    ],
+    linkstatic = True,
+)
+
+cc_test(
+    name = "region_evaluator_test",
+    srcs = ["region_evaluator_test.cc"],
+    deps = [
+        ":region_evaluator",
+        "//research/joint_shard/tests/support:region_test",
+        "//research/joint_shard/transforms:region_candidates",
+        "@com_google_googletest//:gtest_main",
+    ],
+    linkstatic = True,
+)
+
+cc_test(
+    name = "shardy_runner_test",
+    srcs = ["shardy_runner_test.cc"],
+    linkstatic = True,
+    deps = [
+        ":shardy_runner",
+        "//research/joint_shard/tests/support:mlir_test",
+        "@com_google_googletest//:gtest_main",
     ],
 )

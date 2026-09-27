@@ -6,7 +6,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
 #include "research/joint_shard/bridge/stablehlo_exporter.h"
+#include "research/joint_shard/transforms/region_candidates.h"
 #include "shardy/dialect/sdy/ir/utils.h"
+
+namespace joint_shard {
 
 namespace {
 mlir::OwningOpRef<mlir::ModuleOp> createWrapper(
@@ -60,7 +63,7 @@ EvaluationResult RegionEvaluator::evaluate(
     mlir::ModuleOp prepared, const BoundaryState& boundary,
     const ShardyRunOptions& options) const {
   EvaluationResult result;
-  if (options.stopAfter != ShardyStage::Collectives)
+  if (options.stop_after != ShardyStage::Collectives)
     throw std::invalid_argument(
         "region evaluation requires collective conversion");
   mlir::OwningOpRef<mlir::ModuleOp> module(prepared.clone());
@@ -100,7 +103,7 @@ EvaluationResult RegionEvaluator::evaluate(
   }
   result.feasible = true;
   result.cost = model_.estimate(*module, mesh_.mesh);
-  result.snapshots = runner.snapshots();
+  result.lowered_mlir = runner.takeFinalMlir();
   return result;
 }
 
@@ -148,3 +151,5 @@ Cost ReshardCostOracle::estimate(const TensorSharding& from,
                                  const TensorSharding& to, mlir::Type type) {
   return plan(from, to, type).cost;
 }
+
+}  // namespace joint_shard

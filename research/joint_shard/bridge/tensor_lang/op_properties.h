@@ -8,6 +8,8 @@
 
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 
+namespace joint_shard {
+
 struct Elementwise {
   bool operator==(const Elementwise&) const = default;
 };
@@ -66,5 +68,7 @@ PropertyDecision queryProperty(const TensorNode& node,
                                const PropertyContext& context);
 bool hasProperty(const TensorNode& node, const OpProperty& property,
                  const PropertyContext& context);
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_TENSOR_LANG_OP_PROPERTIES_H_

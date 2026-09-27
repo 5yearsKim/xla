@@ -8,6 +8,8 @@
 #include "eggc/egraph.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 
+namespace joint_shard {
+
 // Shared admission policy used by the region splitter and importer.
 // Unsupported and annotated operations stay in MLIR as opaque boundaries.
 // Only canonical single-input reducer regions can be imported.
@@ -33,5 +35,7 @@ class StableHloImporter {
   TensorRecExpr original_;
   llvm::DenseMap<mlir::Value, eggc::Id> original_ids_;
 };
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_BRIDGE_STABLEHLO_IMPORTER_H_

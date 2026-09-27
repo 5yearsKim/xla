@@ -1,0 +1,28 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//research/joint_shard:__subpackages__"])
+
+cc_library(
+    name = "reports",
+    srcs = ["reports.cc"],
+    hdrs = ["reports.h"],
+    deps = [
+        "//research/joint_shard/search:region_optimizer",
+        "//research/joint_shard/transforms:rewrite_regions",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "artifact_writer",
+    srcs = ["artifact_writer.cc"],
+    hdrs = ["artifact_writer.h"],
+    deps = [
+        ":reports",
+        "//research/joint_shard/search:optimization_observer",
+        "//research/joint_shard/search:region_optimizer",
+        "//research/joint_shard/sharding:shardy_runner",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)

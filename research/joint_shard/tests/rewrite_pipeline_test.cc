@@ -3,24 +3,21 @@
 #include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
 #include "research/joint_shard/bridge/stablehlo_importer.h"
+#include "research/joint_shard/reporting/reports.h"
 #include "research/joint_shard/sharding/shardy_runner.h"
+#include "research/joint_shard/tests/support/mlir_test.h"
 #include "research/joint_shard/transforms/rewrite_regions.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
+namespace joint_shard {
+
 namespace {
-class RewritePipelineTest : public ::testing::Test {
+class RewritePipelineTest : public test::MlirTest {
  protected:
-  mlir::MLIRContext context;
-  RewritePipelineTest() {
-    mlir::DialectRegistry registry;
-    mlir::stablehlo::registerAllDialects(registry);
-    mlir::sdy::registerAllDialects(registry);
-    context.appendDialectRegistry(registry);
-  }
   mlir::OwningOpRef<mlir::ModuleOp> parse(llvm::StringRef text) {
-    return mlir::parseSourceString<mlir::ModuleOp>(text, &context);
+    return parseUnchecked(text);
   }
 };
 TEST_F(RewritePipelineTest, MultipleOutputsKeepSharedProducer) {
@@ -73,10 +70,12 @@ TEST_F(RewritePipelineTest, SingleOutputDagAndBudgetFallbackPreserveSharing) {
     EXPECT_TRUE(extraction.attempted_dag);
     EXPECT_EQ(extraction.fallback,
               limited ? "no-dag-candidate" : "baseline-no-worse");
-    EXPECT_NE(report.str().find("selected=tree roots=1 attempted_dag=1"),
-              std::string::npos);
+    EXPECT_NE(
+        formatReport(report).find("selected=tree roots=1 attempted_dag=1"),
+        std::string::npos);
     if (limited)
-      EXPECT_NE(report.str().find("stop=state-limit"), std::string::npos);
+      EXPECT_NE(formatReport(report).find("stop=state-limit"),
+                std::string::npos);
     auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
     auto ret = llvm::cast<mlir::func::ReturnOp>(
         function.getBody().front().getTerminator());
@@ -277,34 +276,6 @@ TEST_F(RewritePipelineTest, EmptyReductionRetainsCanonicalInitializer) {
               0.0f);
   });
 }
-TEST_F(RewritePipelineTest, RewriteCliLimitsAndPolicyAreValidated) {
-  TensorRewriteOptions options;
-  EXPECT_EQ(options.extractor, TensorExtractorMode::Auto);
-  EXPECT_EQ(options.dag.state_limit, 10000);
-  EXPECT_EQ(options.dag.time_limit, std::chrono::milliseconds(50));
-  EXPECT_EQ(options.dag.frontier_limit, 1000);
-  EXPECT_TRUE(parseTensorRewriteOption("--extractor=tree", options));
-  EXPECT_EQ(options.extractor, TensorExtractorMode::Tree);
-  EXPECT_TRUE(parseTensorRewriteOption("--extractor=auto", options));
-  EXPECT_EQ(options.extractor, TensorExtractorMode::Auto);
-  EXPECT_TRUE(parseTensorRewriteOption("--dag-states=123", options));
-  EXPECT_EQ(options.dag.state_limit, 123);
-  EXPECT_TRUE(parseTensorRewriteOption("--dag-time-ms=7", options));
-  EXPECT_EQ(options.dag.time_limit, std::chrono::milliseconds(7));
-  EXPECT_TRUE(parseTensorRewriteOption("--dag-frontier=12", options));
-  EXPECT_EQ(options.dag.frontier_limit, 12);
-  for (auto argument :
-       {"--extractor=dag", "--dag-states=0", "--dag-frontier=-1",
-        "--dag-time-ms=bad", "--dag-time-ms=18446744073709551615"})
-    EXPECT_THROW(parseTensorRewriteOption(argument, options),
-                 std::invalid_argument);
-  EXPECT_TRUE(parseTensorRewriteOption("--numerical-policy=relaxed", options));
-  EXPECT_EQ(options.numerical_policy, NumericalPolicy::AllowReassociation);
-  EXPECT_TRUE(parseTensorRewriteOption("--search-visits=123", options));
-  EXPECT_EQ(options.semantic.visit_limit, 123);
-  EXPECT_THROW(parseTensorRewriteOption("--iterations=0", options),
-               std::invalid_argument);
-  EXPECT_THROW(parseTensorRewriteOption("--numerical-policy=maybe", options),
-               std::invalid_argument);
-}
 }  // namespace
+
+}  // namespace joint_shard

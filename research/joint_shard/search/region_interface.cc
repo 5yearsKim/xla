@@ -4,6 +4,9 @@
 #include <stdexcept>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "research/joint_shard/transforms/regionizer.h"
+
+namespace joint_shard {
 ValueIndex::ValueIndex(mlir::ModuleOp module) {
   size_t next = 0;
   for (auto function : module.getOps<mlir::func::FuncOp>()) {
@@ -65,3 +68,5 @@ PairInterface buildPairInterface(const Region& a, const Region& b,
   if (!consumed) throw std::invalid_argument("B does not consume A output");
   return result;
 }
+
+}  // namespace joint_shard

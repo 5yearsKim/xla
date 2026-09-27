@@ -9,6 +9,8 @@
 #include "mlir/Parser/Parser.h"
 #include "shardy/dialect/sdy/ir/utils.h"
 
+namespace joint_shard {
+
 namespace {
 TensorSharding layout(mlir::Value value, const MeshContext& mesh) {
   auto attr = mlir::sdy::getSharding(value);
@@ -120,3 +122,5 @@ std::string PlanMaterializer::finish(mlir::ValueRange outputs,
   module_->print(out);
   return text;
 }
+
+}  // namespace joint_shard

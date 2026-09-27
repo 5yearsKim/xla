@@ -6,8 +6,12 @@
 #include "cxxopts.hpp"
 #include "research/joint_shard/transforms/rewrite_options.h"
 
+namespace joint_shard {
+
 void addRewriteCliOptions(cxxopts::Options& options);
 bool applyRewriteCliOption(const std::string& name, const std::string& value,
                            TensorRewriteOptions& rewrite_options);
+
+}  // namespace joint_shard
 
 #endif  // RESEARCH_JOINT_SHARD_TOOLS_REWRITE_CLI_OPTIONS_H_

@@ -7,8 +7,8 @@ cc_library(
     srcs = ["stablehlo_importer.cc"],
     hdrs = ["stablehlo_importer.h"],
     deps = [
-        "//research/joint_shard/egg-c:eggc",
         "//research/joint_shard/bridge/tensor_lang:tensorlang",
+        "//research/joint_shard/egg-c:eggc",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@stablehlo//:stablehlo_ops",
@@ -20,8 +20,8 @@ cc_library(
     srcs = ["stablehlo_exporter.cc"],
     hdrs = ["stablehlo_exporter.h"],
     deps = [
-        "//research/joint_shard/egg-c:eggc",
         "//research/joint_shard/bridge/tensor_lang:tensorlang",
+        "//research/joint_shard/egg-c:eggc",
         "@llvm-project//mlir:IR",
         "@stablehlo//:stablehlo_ops",
     ],

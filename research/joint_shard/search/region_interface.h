@@ -5,7 +5,11 @@
 #include <map>
 #include <vector>
 
-#include "research/joint_shard/transforms/regionizer.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Types.h"
+
+namespace joint_shard {
+struct Region;
 using ValueId = size_t;
 struct TensorPort {
   ValueId value = 0;
@@ -35,4 +39,6 @@ struct PairInterface {
 };
 PairInterface buildPairInterface(const Region& a, const Region& b,
                                  const ValueIndex& values);
+}  // namespace joint_shard
+
 #endif

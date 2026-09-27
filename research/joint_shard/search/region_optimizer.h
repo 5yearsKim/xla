@@ -1,9 +1,21 @@
 #ifndef RESEARCH_JOINT_SHARD_SEARCH_REGION_OPTIMIZER_H_
 #define RESEARCH_JOINT_SHARD_SEARCH_REGION_OPTIMIZER_H_
 
+#include <map>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "eggc/runner.hpp"
+#include "research/joint_shard/search/optimization_observer.h"
 #include "research/joint_shard/search/pair_composer.h"
+#include "research/joint_shard/sharding/boundary_state.h"
+#include "research/joint_shard/sharding/cost_model.h"
+#include "research/joint_shard/transforms/regionizer.h"
+#include "research/joint_shard/transforms/rewrite_options.h"
+
+namespace joint_shard {
 
 struct RegionOptimizerOptions {
   RegionizerOptions regionizer;
@@ -16,7 +28,6 @@ struct RegionOptimizerOptions {
   size_t max_candidates = 32;
   size_t max_boundary_states = 256;
   std::string mesh_name;
-  std::string dump_directory;
 };
 struct OptimizationReport {
   MeshContext mesh;
@@ -24,11 +35,13 @@ struct OptimizationReport {
   std::vector<PairSummary> compositions;
   std::map<std::string, size_t> preserved_operations;
   std::vector<eggc::RunReport> saturation;
-  std::string str() const;
 };
 // Does not mutate the source module. Optional composition produces standalone
 // IR.
 OptimizationReport summarizeRegions(mlir::ModuleOp module,
-                                    const RegionOptimizerOptions& options = {});
+                                    const RegionOptimizerOptions& options = {},
+                                    const OptimizationObserver& observer = {});
+
+}  // namespace joint_shard
 
 #endif

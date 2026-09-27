@@ -15,21 +15,35 @@ implementations:
 
 ```text
 joint_shard/
-  BUILD.bazel       # aggregate integration-test suite
+  BUILD.bazel       # aggregate unit/integration-test suite
   bridge/           # TensorLang nodes and StableHLO ↔ egg-c import/export
   transforms/       # region discovery, saturation and candidate extraction
   sharding/         # boundary layouts, Shardy evaluation and costs
   search/           # typed interfaces, region tables, pair composition and orchestration
-  tools/            # command-line executables
-  tests/            # cross-component C++ integration tests
+  reporting/        # report formatting and artifact output
+  tools/            # command-line executables and CLI parsing
+  tests/            # cross-component integration tests and shared test support
   testdata/         # MLIR fixtures
   egg-c/            # e-graph engine, with its own package structure
 ```
 
 Each component has its own `BUILD.bazel`. Libraries are visible only within
 `joint_shard`; tools and integration tests depend on those component targets.
-Component-specific unit tests can live beside the implementation they test.
+Component-specific unit tests live beside the implementation they test.
 New source files belong in their component package, with explicit `srcs`/`hdrs`.
+
+C++ APIs live in the `joint_shard` namespace. `summarizeRegions` returns
+structured results and accepts synchronous `OptimizationObserver` callbacks;
+search and Shardy execution do not write files. The tools connect an
+`ArtifactWriter` when `--dump-dir` is requested and format results with
+`formatReport`. CLI parsing belongs to `tools/`, while library callers populate
+typed options directly.
+
+Shardy retains only the final stage by default. `SnapshotCapture::AllStages`
+enables intermediate snapshots, and `collect_statistics` separately enables
+global work/payload diagnostics. Evaluations return final lowered IR and the
+optimizer's time cost. Region summaries retain winners incrementally, then
+assign stable plan IDs with `finalizePlans`.
 
 This project uses C++20. Build with `--config=joint_shard`: the root `.bazelrc`
 scopes C++20 source flags to joint_shard and selects the hermetic GCC 12 / glibc
@@ -111,8 +125,8 @@ bazel-bin/research/joint_shard/tools/summarize_regions \
   --dump-dir=/tmp/joint_shard_regions
 ```
 
-`run_shardy` runs the raw annotated pipeline; its previous whole-module candidate
-comparison options have been removed. See [REGION_OPTIMIZER.md](REGION_OPTIMIZER.md)
+`run_shardy` runs the raw annotated pipeline. See
+[REGION_OPTIMIZER.md](REGION_OPTIMIZER.md)
 for boundary policies, cost parameters, budgets and output artifacts.
 
 To inspect rewriting without running propagation:

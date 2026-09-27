@@ -4,6 +4,8 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+namespace joint_shard {
+
 namespace {
 template <class Handle>
 void hashHandle(std::size_t& seed, Handle handle) {
@@ -143,6 +145,7 @@ constexpr OpSchema schemas[] = {
     {OpKind::BroadcastInDim, "broadcast_in_dim", 1, false},
 };
 }
+std::span<const OpSchema> opSchemas() { return schemas; }
 const OpSchema* opSchema(OpKind op) {
   for (const auto& schema : schemas)
     if (schema.op == op) return &schema;
@@ -177,3 +180,5 @@ bool validNodeSchema(const TensorNode& node) {
       return false;
   }
 }
+
+}  // namespace joint_shard

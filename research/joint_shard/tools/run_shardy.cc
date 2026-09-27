@@ -6,12 +6,18 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "cxxopts.hpp"
+#include "research/joint_shard/reporting/artifact_writer.h"
 #include "research/joint_shard/sharding/shardy_runner.h"
 #include "shardy/dialect/sdy/ir/register.h"
 #include "stablehlo/dialect/Register.h"
 
+namespace joint_shard {
+
 // Raw pipeline inspection. Rewrite/layout search belongs to summarize_regions.
+}  // namespace joint_shard
+
 int main(int argc, char** argv) {
+  using namespace joint_shard;
   try {
     cxxopts::Options cli("run_shardy",
                          "Run the raw Shardy pipeline on an MLIR file.");
@@ -36,18 +42,20 @@ int main(int argc, char** argv) {
     }
 
     ShardyRunOptions options;
+    options.collect_statistics = true;
+    std::string dump_directory;
     for (const cxxopts::KeyValue& argument : parsed.arguments()) {
       if (argument.key() == "input") continue;
       if (argument.key() == "dump-dir") {
-        options.dumpDirectory = argument.value();
+        dump_directory = argument.value();
       } else if (argument.key() == "stop-after") {
         const std::string& stage = argument.value();
         if (stage == "propagation")
-          options.stopAfter = ShardyStage::Propagation;
+          options.stop_after = ShardyStage::Propagation;
         else if (stage == "reshards")
-          options.stopAfter = ShardyStage::ExplicitReshards;
+          options.stop_after = ShardyStage::ExplicitReshards;
         else if (stage == "collectives")
-          options.stopAfter = ShardyStage::Collectives;
+          options.stop_after = ShardyStage::Collectives;
         else
           throw std::invalid_argument("unknown stop stage: " + stage);
       }
@@ -60,13 +68,21 @@ int main(int argc, char** argv) {
     auto module = mlir::parseSourceFile<mlir::ModuleOp>(
         parsed["input"].as<std::string>(), &context);
     if (!module || mlir::failed(mlir::verify(*module))) return 1;
+    ArtifactWriter artifacts(dump_directory);
+    if (!dump_directory.empty()) {
+      options.capture = SnapshotCapture::AllStages;
+      options.on_snapshot = [&](const ShardySnapshot& snapshot) {
+        artifacts.writeSnapshot(snapshot);
+      };
+    }
     ShardyRunner runner;
     if (mlir::failed(runner.run(*module, options))) return 1;
     const auto& snapshot = runner.snapshots().back();
     llvm::errs() << "logical_payload_bytes="
-                 << snapshot.cost.communication_payload_bytes
-                 << " global_compute_work=" << snapshot.cost.compute_work
-                 << " unknown_costs=" << snapshot.cost.unknown_costs << "\n";
+                 << snapshot.statistics->communication_payload_bytes
+                 << " global_compute_work=" << snapshot.statistics->compute_work
+                 << " unknown_costs=" << snapshot.statistics->unknown_costs
+                 << "\n";
     llvm::outs() << snapshot.mlir;
   } catch (const std::exception& error) {
     llvm::errs() << error.what() << "\n";

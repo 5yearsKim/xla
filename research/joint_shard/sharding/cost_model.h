@@ -6,6 +6,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "shardy/dialect/sdy/ir/dialect.h"
 
+namespace joint_shard {
+
 // All costs are estimated microseconds, summed sequentially without overlap.
 struct Cost {
   double compute = 0;
@@ -40,5 +42,7 @@ class CostModel {
  private:
   CostModelOptions options_;
 };
+
+}  // namespace joint_shard
 
 #endif

@@ -8,6 +8,8 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/Casting.h"
 
+namespace joint_shard {
+
 namespace {
 InferenceResult invalid(std::string reason) {
   return {InferenceStatus::Invalid, {}, std::move(reason)};
@@ -261,3 +263,5 @@ eggc::AnalysisMerge TensorAnalysis::merge(TensorFacts& lhs,
   return changed ? eggc::AnalysisMerge::Changed
                  : eggc::AnalysisMerge::Unchanged;
 }
+
+}  // namespace joint_shard
