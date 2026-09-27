@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
@@ -16,6 +17,7 @@
 #include "research/joint_shard/bridge/stablehlo_importer.h"
 
 namespace {
+const char* stopName(eggc::StopReason reason);
 struct NodeHash {
   size_t operator()(const TensorNode& node) const { return node.hash(); }
 };
@@ -51,6 +53,22 @@ void rewriteIsland(const std::vector<mlir::Operation*>& island,
     std::vector<eggc::Id> ids;
     for (auto root : roots) ids.push_back(importer.importValue(root));
     report.runs.push_back(eggc::run(graph, rules, options.runner));
+    if (options.print_egraph) {
+      graph.rebuild();
+      auto& out = llvm::errs();
+      out << "egraph region=" << report.regions - 1
+          << " stop=" << stopName(report.runs.back().reason) << " roots=";
+      for (auto id : ids) out << " e" << graph.find(id);
+      out << '\n';
+      for (auto id : graph.classes()) {
+        out << "e" << id << ":\n";
+        for (const auto& node : graph.nodes(id)) {
+          out << "  " << node.format();
+          for (auto child : node.children()) out << " e" << graph.find(child);
+          out << '\n';
+        }
+      }
+    }
     TensorExtractionReport extraction;
     auto selectedRoots =
         extractTensorRoots(graph, ids, options.extraction, options.extractor,
@@ -238,10 +256,14 @@ std::string_view tensorRewriteOptionHelp() {
          "[--extraction=compute|depth|memory] [--rule-group=exact|algebra|all] "
          "[--extractor=auto|tree] [--dag-states=N] [--dag-time-ms=N] "
          "[--dag-frontier=N] "
-         "[--rewrite-report]";
+         "[--rewrite-report] [--print-egraph]";
 }
 bool parseTensorRewriteOption(std::string_view argument,
                               TensorRewriteOptions& options) {
+  if (argument == "--print-egraph") {
+    options.print_egraph = true;
+    return true;
+  }
   bool NumericalPermissions::* permission = nullptr;
   if (argument == "--allow-fp-reorder")
     permission = &NumericalPermissions::reorder_floating_point;

@@ -99,6 +99,16 @@ bazel-bin/research/joint_shard/tools/parse_stablehlo \
   research/joint_shard/testdata/add_mul.mlir
 ```
 
+Add `--print-egraph` to print every e-class and its alternative nodes to stderr
+after rewriting, before extraction. Child references and roots use canonical
+`eN` IDs. The header records whether rewriting saturated or stopped at a limit:
+
+```sh
+bazel-bin/research/joint_shard/tools/parse_stablehlo \
+  research/joint_shard/testdata/megatron_layer/01.before_propagation.mlir \
+  --print-egraph > /tmp/rewritten.mlir 2> /tmp/egraph.txt
+```
+
 ## Propagation and communication
 
 The pipeline verifies the annotated module, propagates shardings, inserts

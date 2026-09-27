@@ -14,6 +14,7 @@
 
 struct TensorRewriteOptions {
   std::string rules_file;  // Empty uses the embedded tensor.rules.
+  bool print_egraph = false;  // Print post-rewrite e-classes to stderr.
   NumericalPolicy numerical_policy = NumericalPolicy::PreserveEvaluation;
   eggc::RunOptions runner = [] {
     eggc::RunOptions limits;
