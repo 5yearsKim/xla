@@ -1,0 +1,26 @@
+[project]
+name = "joint-shard-python"
+version = "0.1.0"
+description = "high level python ml operator executor for joint-shard"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax>=0.11.2",
+    "numpy>=1.26",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.7",
+]
+
+[tool.ruff]
+include = ["src/**/*.py"]
+
+[tool.ruff.lint]
+select = ["ANN", "I"]
+
+# too strict/noisy for projects
+ignore = [
+    "ANN401",  # Allow typing.Any
+]
