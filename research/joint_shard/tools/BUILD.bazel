@@ -75,3 +75,24 @@ cc_test(
     ],
     linkstatic = True,
 )
+
+cc_binary(
+    name = "workload_ablation",
+    srcs = ["workload_ablation.cc"],
+    deps = [
+        ":rewrite_cli_options",
+        "//research/joint_shard/bridge:stablehlo_importer",
+        "//research/joint_shard/export:selected_export",
+        "//research/joint_shard/sharding:module_statistics",
+        "//research/joint_shard/sharding:plan_materializer",
+        "//research/joint_shard/sharding:region_evaluator",
+        "//research/joint_shard/transforms:region_candidates",
+        "@cxxopts//:cxxopts",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@shardy//shardy/dialect/sdy/ir:register",
+        "@stablehlo//:register",
+    ],
+)

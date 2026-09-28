@@ -3,6 +3,14 @@
 The region optimizer architecture, policies and experiments are in
 [REGION_OPTIMIZER.md](../misc/REGION_OPTIMIZER.md).
 
+The [LayerNorm/four-arm report](results/four_arm/REPORT.md) compares fixed-contract
+baseline, rewrite-only, sharding-only, and combined experiments. The original
+LayerNorm's centered variance can be rewritten to raw moments with the explicit
+`--numerical-policy=relaxed --allow-raw-moments` opt-in. This flag remains off in
+every engine preset. The experiment driver is `tools:workload_ablation`, with
+the [Python runner](../joint_shard_python/README.md#four-arm-experiment-and-aggressive-layernorm)
+providing shape/layout sweeps, numerical checks, and reports.
+
 The TensorLang implementation and extension contracts are in
 [TENSORLANG.md](TENSORLANG.md). The bridge uses structural nodes with typed
 operator attributes;
@@ -100,16 +108,22 @@ other nested regions intact.
 
 The bridge now covers general/batched dots, common elementwise operations,
 constants, transpose, static reshape, broadcast, and canonical reductions.
-Semantic parameters live in native typed attrs. Shared standalone inference
+Semantic parameters live in native typed attrs. Rules use typed C++ patterns,
+operator/property guards, and optional checked replacement callbacks. Dot
+dimensions bind as one value; replacement dot shapes are inferred. See
+[TENSORLANG.md](TENSORLANG.md#c-pattern-definitions) for examples.
+Shared standalone inference
 validates proposed expressions before insertion/export. Derived `result_layout`
 and `xla_shape` hints are recomputed downstream; unknown attrs remain boundaries.
 
-The default pipeline loads embedded `tensor.rules` and appends attribute-aware
+The default pipeline compiles `tensor_rules.cc` and appends computed attribute
 rules. Relaxed floating-point algebra is the default and can change numerical results.
 Use `--numerical-policy=strict` to preserve floating evaluation, or configure
 explicit numerical permissions. Every captured
 operator occurrence is checked, and a complete RHS is validated before mutation.
 Search limits and rejection reasons are exposed through `--rewrite-report`.
+[WORKLOAD_REWRITES.md](WORKLOAD_REWRITES.md) records rule coverage, CPU numerical
+checks on the Python originals, and remaining saturation/importer limits.
 Contiguous supported islands share one graph and export cache across all outputs.
 
 `summarize_regions` splits supported computations into bounded regions, saturates

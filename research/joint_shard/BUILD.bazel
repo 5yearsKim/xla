@@ -1,6 +1,7 @@
 test_suite(
     name = "tests",
     tests = [
+        "//research/joint_shard/bridge/tensor_lang:semantic_attribute_rewrite_test",
         "//research/joint_shard/bridge/tensor_lang:semantic_rewrite_test",
         "//research/joint_shard/bridge/tensor_lang:tensorlang_test",
         "//research/joint_shard/egg-c/tests:concepts_test",

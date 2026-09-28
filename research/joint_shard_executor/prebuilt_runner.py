@@ -133,9 +133,8 @@ class SelectedExecutable:
     def _sharding(self, port):
         return xc.GSPMDSharding(self.devices, xc.HloSharding.from_string(port.sharding))
 
-    def execute(self, inputs, *, repeats=1):
-        if repeats < 1:
-            raise ValueError("repeats must be positive")
+    def prepare_inputs(self, inputs: list[np.ndarray]) -> list[jax.Array]:
+        """Upload global inputs using the exact exported boundary shardings."""
         if len(inputs) != len(self.inputs):
             raise ValueError(f"expected {len(self.inputs)} arguments")
         arguments = []
@@ -151,17 +150,30 @@ class SelectedExecutable:
             arguments.append(
                 jax.make_array_from_single_device_arrays(port.shape, sharding, arrays)
             )
-        for _ in range(repeats):
-            shards = self.executable.execute_sharded(
-                arguments
-            ).disassemble_into_single_device_arrays()
-            # Materialization also waits for completion before another repeat.
-            outputs = [
-                np.asarray(
-                    jax.make_array_from_single_device_arrays(
-                        port.shape, self._sharding(port), arrays
-                    )
+        return arguments
+
+    def execute_device(self, arguments: list[jax.Array]) -> list[list[jax.Array]]:
+        """Execute with prepared inputs and return device-resident output shards."""
+        return self.executable.execute_sharded(
+            arguments
+        ).disassemble_into_single_device_arrays()
+
+    def materialize_outputs(self, shards: list[list[jax.Array]]) -> list[np.ndarray]:
+        return [
+            np.asarray(
+                jax.make_array_from_single_device_arrays(
+                    port.shape, self._sharding(port), arrays
                 )
-                for port, arrays in zip(self.outputs, shards)
-            ]
+            )
+            for port, arrays in zip(self.outputs, shards)
+        ]
+
+    def execute(self, inputs, *, repeats=1):
+        if repeats < 1:
+            raise ValueError("repeats must be positive")
+        arguments = self.prepare_inputs(inputs)
+        for _ in range(repeats):
+            shards = self.execute_device(arguments)
+            # Materialization also waits for completion before another repeat.
+            outputs = self.materialize_outputs(shards)
         return outputs

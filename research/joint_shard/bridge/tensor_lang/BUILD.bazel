@@ -3,13 +3,6 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//research/joint_shard:__subpackages__"])
 
-genrule(
-    name = "embedded_rules",
-    srcs = ["tensor.rules"],
-    outs = ["tensor_rules.inc"],
-    cmd = "awk 'BEGIN {print \"R\\\"tensor_rules(\"} {print} END {print \")tensor_rules\\\"\"}' $(location tensor.rules) > $@",
-)
-
 cc_library(
     name = "tensorlang",
     srcs = [
@@ -17,16 +10,20 @@ cc_library(
         "op_properties.cc",
         "semantic_rewrite.cc",
         "semantic_rule_application.cc",
+        "semantic_rule_attributes.cc",
+        "semantic_rule_guards.cc",
         "semantic_rule_internal.h",
         "semantic_rule_matcher.cc",
-        "semantic_rule_parser.cc",
+        "semantic_rule_validation.cc",
         "tensor_analysis.cc",
+        "tensor_patterns.cc",
+        "tensor_rules.cc",
         "tensorlang.cc",
     ],
     hdrs = [
-        ":embedded_rules",
         "op_properties.h",
         "tensor_analysis.h",
+        "tensor_patterns.h",
         "tensor_rewrites.h",
         "tensorlang.h",
     ],
@@ -34,7 +31,21 @@ cc_library(
         "//research/joint_shard/egg-c:eggc",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
     ],
+)
+
+cc_test(
+    name = "semantic_attribute_rewrite_test",
+    srcs = ["semantic_attribute_rewrite_test.cc"],
+    deps = [
+        ":tensorlang",
+        "//research/joint_shard/egg-c:eggc",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:IR",
+        "@stablehlo//:stablehlo_ops",
+    ],
+    linkstatic = True,
 )
 
 cc_test(

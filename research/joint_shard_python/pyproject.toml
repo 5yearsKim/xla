@@ -15,7 +15,7 @@ dev = [
 ]
 
 [tool.ruff]
-include = ["main.py", "ml_workloads/**/*.py", "tests/**/*.py"]
+include = ["main.py", "ml_workloads/**/*.py", "tests/**/*.py", "experiments/**/*.py"]
 
 [tool.ruff.lint]
 select = ["ANN", "I"]

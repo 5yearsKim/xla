@@ -6,7 +6,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "eggc/runner.hpp"
 #include "gtest/gtest.h"
-#include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
+#include "research/joint_shard/bridge/tensor_lang/tensor_patterns.h"
 
 namespace joint_shard {
 
@@ -97,47 +97,28 @@ Matrix evaluateMatrix(const TensorRecExpr& expression,
   }
   return values.back();
 }
-TEST_F(SemanticRewriteTest, RejectsTyposArityAndUnboundOperatorsAtLoad) {
-  for (auto source : {"rule bad { typo(?x) => ?x where Involution(F); }",
-                      "rule bad { add(?x) => ?x where Involution(F); }",
-                      "rule bad { F(?x) => G(?x) where Involution(F); }",
-                      "rule bad { F(?x) => F(?x, ?x) where Involution(F); }",
-                      "rule bad { F(?x) => ?y where Involution(F); }",
-                      "rule bad { F(?x) => ?x where LinearIn(F, 1); }",
-                      "rule bad { F(?) => ? where Involution(F); }",
-                      "rule bad { scale(?x) => ?x where Scalar(?x); }",
-                      "rule bad { F(?x) => ?x where Scalar(?y); }",
-                      "rule bad { F(?x) => ?x where Scalar(F); }",
-                      "rule bad { F(?x) => ?x where Scalar(?x, 0); }",
-                      "rule bad { F(?x) => ?x where Uniform(?x, 0); }",
-                      "rule dup { F(?x) => ?x where Involution(F); } rule dup "
-                      "{ F(?x) => ?x where Involution(F); }"}) {
-    EXPECT_THROW(parseSemanticRules(source), std::invalid_argument) << source;
-  }
-}
-TEST_F(SemanticRewriteTest, SourceNameAppearsInDiagnostics) {
-  auto options = reporting();
-  options.source_name = "my.rules";
-  try {
-    parseSemanticRules("rule broken {", NumericalPolicy::PreserveEvaluation,
-                       options);
-    FAIL();
-  } catch (const std::invalid_argument& error) {
-    EXPECT_NE(std::string(error.what()).find("my.rules:"), std::string::npos);
-  }
-}
 TEST_F(SemanticRewriteTest, ConjunctionUsesSharedProperties) {
+  const auto pattern_F = patterns::operator_var("F", 2);
+  const auto pattern_x = patterns::tensor_var("x");
+  const auto pattern_y = patterns::tensor_var("y");
+
   TensorEGraph graph;
   auto x = input(graph, 0, integer()), y = input(graph, 1, integer());
   auto root = graph.add({OpKind::Add, NoAttrs{}, {x, y}});
-  auto rules = parseSemanticRules(
-      "rule swap { F(?x, ?y) => F(?y, ?x) where Elementwise(F) and "
-      "Commutative(F); }");
+  auto rules =
+      compileRules({patterns::rule("swap", pattern_F(pattern_x, pattern_y),
+                                   pattern_F(pattern_y, pattern_x))
+                        .when({patterns::elementwise(pattern_F),
+                               patterns::commutative(pattern_F)})});
   eggc::run(graph, rules);
   auto reverse = graph.add({OpKind::Add, NoAttrs{}, {y, x}});
   EXPECT_EQ(graph.find(root), graph.find(reverse));
 }
 TEST_F(SemanticRewriteTest, StrictFloatingReorderingIsRejectedWithReason) {
+  const auto pattern_F = patterns::operator_var("F", 2);
+  const auto pattern_x = patterns::tensor_var("x");
+  const auto pattern_y = patterns::tensor_var("y");
+
   TensorEGraph graph;
   auto type =
       mlir::RankedTensorType::get({2, 3}, mlir::Float32Type::get(&context));
@@ -145,10 +126,11 @@ TEST_F(SemanticRewriteTest, StrictFloatingReorderingIsRejectedWithReason) {
   graph.add({OpKind::Add, NoAttrs{}, {x, y}});
   auto options = reporting();
   auto count = graph.node_count();
-  eggc::run(graph,
-            parseSemanticRules(
-                "rule swap { F(?x, ?y) => F(?y, ?x) where Commutative(F); }",
-                NumericalPolicy::PreserveEvaluation, options));
+  eggc::run(graph, compileRules(
+                       {patterns::rule("swap", pattern_F(pattern_x, pattern_y),
+                                       pattern_F(pattern_y, pattern_x))
+                            .when({patterns::commutative(pattern_F)})},
+                       NumericalPolicy::PreserveEvaluation, options));
   EXPECT_EQ(graph.node_count(), count);
   EXPECT_GT(options.report->at("swap").rejections.size(), 0);
   EXPECT_EQ(options.report->at("swap").applied, 0);
@@ -171,6 +153,9 @@ TEST_F(SemanticRewriteTest,
   EXPECT_FALSE(queryProperty(add, Associative{}, facts).allowed);
 }
 TEST_F(SemanticRewriteTest, InvalidRhsMakesNoPartialInsertion) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto x = input(graph, 0, integer({2, 3}));
   auto f = graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {x}});
@@ -179,9 +164,11 @@ TEST_F(SemanticRewriteTest, InvalidRhsMakesNoPartialInsertion) {
   auto count = graph.node_count();
   // negate(?x) would insert a node before the add discovered its shape mismatch
   // in the old recursive instantiator. Preparation rejects the entire RHS.
-  auto rules = parseSemanticRules(
-      "rule mismatch { F(F(?x)) => add(negate(?x), F(?x)) where Involution(F); "
-      "}",
+  auto rules = compileRules(
+      {patterns::rule(
+           "mismatch", pattern_F(pattern_F(pattern_x)),
+           patterns::add(patterns::negate(pattern_x), pattern_F(pattern_x)))
+           .when({patterns::involution(pattern_F)})},
       NumericalPolicy::PreserveEvaluation, options);
   eggc::run(graph, rules, 1);
   EXPECT_EQ(graph.node_count(), count);
@@ -194,12 +181,16 @@ TEST_F(SemanticRewriteTest, BoundedSearchReportsSearchLimit) {
   auto options = reporting();
   options.visit_limit = 1;
   auto result = eggc::run(
-      graph, parseSemanticRules(defaultSemanticRules(),
-                                NumericalPolicy::PreserveEvaluation, options));
+      graph, buildSemanticRules(NumericalPolicy::PreserveEvaluation, options));
   EXPECT_EQ(result.reason, eggc::StopReason::SearchLimit);
   EXPECT_GT(options.report->at("commute-binary-operator").budget_stops, 0);
 }
 TEST_F(SemanticRewriteTest, DotLinearityFactorsTwoDots) {
+  const auto pattern_F = patterns::operator_var("F", 2);
+  const auto pattern_a = patterns::tensor_var("a");
+  const auto pattern_b = patterns::tensor_var("b");
+  const auto pattern_c = patterns::tensor_var("c");
+
   TensorEGraph graph;
   auto a = input(graph, 0, integer({2, 3})),
        b = input(graph, 1, integer({3, 4}));
@@ -210,9 +201,12 @@ TEST_F(SemanticRewriteTest, DotLinearityFactorsTwoDots) {
   auto root = graph.add({OpKind::Add, NoAttrs{}, {ab, ac}});
   graph.rebuild();
   auto original = TensorExtractor(graph).find_best(root).second;
-  auto rules = parseSemanticRules(
-      "rule factor { add(F(?a, ?b), F(?a, ?c)) => F(?a, add(?b, ?c)) where "
-      "LinearIn(F, 1); }");
+  auto rules = compileRules(
+      {patterns::rule("factor",
+                      patterns::add(pattern_F(pattern_a, pattern_b),
+                                    pattern_F(pattern_a, pattern_c)),
+                      pattern_F(pattern_a, patterns::add(pattern_b, pattern_c)))
+           .when({patterns::linear_in(pattern_F, 1)})});
   eggc::run(graph, rules);
   auto bc = graph.add({OpKind::Add, NoAttrs{}, {b, c}});
   auto factored = graph.add({OpKind::DotGeneral, attrs, {a, bc}});
@@ -241,6 +235,10 @@ TEST_F(SemanticRewriteTest, DotLinearityFactorsTwoDots) {
   }
 }
 TEST_F(SemanticRewriteTest, ArbitraryTensorScaleDoesNotProveHomogeneity) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_scale = patterns::tensor_var("scale");
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto x = input(graph, 0, integer({2, 2})),
        scale = input(graph, 1, integer({2, 2}));
@@ -248,9 +246,12 @@ TEST_F(SemanticRewriteTest, ArbitraryTensorScaleDoesNotProveHomogeneity) {
   graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {mul}});
   auto options = reporting();
   auto count = graph.node_count();
-  auto rules = parseSemanticRules(
-      "rule scale { F(multiply(?scale, ?x)) => multiply(?scale, F(?x)) where "
-      "HomogeneousIn(F, 0) and Uniform(?scale); }",
+  auto rules = compileRules(
+      {patterns::rule("scale",
+                      pattern_F(patterns::multiply(pattern_scale, pattern_x)),
+                      patterns::multiply(pattern_scale, pattern_F(pattern_x)))
+           .when({patterns::homogeneous_in(pattern_F, 0),
+                  patterns::uniform(pattern_scale)})},
       NumericalPolicy::PreserveEvaluation, options);
   eggc::run(graph, rules);
   EXPECT_EQ(graph.node_count(), count);
@@ -272,6 +273,10 @@ auto preferUnscaledOperators(const TensorEGraph& graph) {
       };
 }
 TEST_F(SemanticRewriteTest, ScaleRebuildsBroadcastForRectangularTranspose) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   for (bool reverse : {false, true}) {
     TensorEGraph graph;
     auto scalar = input(graph, 0, integer({}));
@@ -286,9 +291,12 @@ TEST_F(SemanticRewriteTest, ScaleRebuildsBroadcastForRectangularTranspose) {
         graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {multiply}});
     graph.rebuild();
     auto original = TensorExtractor(graph).find_best(root).second;
-    auto rules = parseSemanticRules(
-        "rule move { F(scale(?s, ?x)) => scale(?s, F(?x)) "
-        "where HomogeneousIn(F, 0) and Scalar(?s); }");
+    auto rules = compileRules(
+        {patterns::rule("move",
+                        pattern_F(patterns::scale(pattern_s, pattern_x)),
+                        patterns::scale(pattern_s, pattern_F(pattern_x)))
+             .when({patterns::homogeneous_in(pattern_F, 0),
+                    patterns::scalar(pattern_s)})});
     eggc::run(graph, rules);
     auto transposed =
         graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {x}});
@@ -326,7 +334,7 @@ TEST_F(SemanticRewriteTest,
                                      : std::vector<eggc::Id>{a, scaled}});
     graph.rebuild();
     auto original = TensorExtractor(graph).find_best(root).second;
-    auto rules = parseSemanticRules(defaultSemanticRules());
+    auto rules = buildSemanticRules();
     eggc::run(graph, rules);
     auto dot = graph.add({OpKind::DotGeneral, attrs, {a, b}});
     auto output_scale = graph.add({OpKind::BroadcastInDim,
@@ -354,9 +362,14 @@ TEST_F(SemanticRewriteTest,
 }
 TEST_F(SemanticRewriteTest,
        ScalarPredicateUsesAnyVariableNameAndRejectsTensors) {
-  auto rules = parseSemanticRules(
-      "rule scalar { F(F(?coefficient)) => ?coefficient "
-      "where Involution(F) and Scalar(?coefficient); }");
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_coefficient = patterns::tensor_var("coefficient");
+
+  auto rules = compileRules(
+      {patterns::rule("scalar", pattern_F(pattern_F(pattern_coefficient)),
+                      pattern_coefficient)
+           .when({patterns::involution(pattern_F),
+                  patterns::scalar(pattern_coefficient)})});
   TensorEGraph graph;
   auto x = input(graph, 0, integer({2, 3}));
   auto negated = graph.add({OpKind::Negate, NoAttrs{}, {x}});
@@ -370,15 +383,21 @@ TEST_F(SemanticRewriteTest,
 }
 TEST_F(SemanticRewriteTest,
        ScaleRequiresScalarProvenanceAndRespectsSearchBudget) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto x = input(graph, 0, integer({2, 3}));
   auto tensor_scale = input(graph, 1, integer({2, 3}));
   auto multiply = graph.add({OpKind::Multiply, NoAttrs{}, {tensor_scale, x}});
   graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {multiply}});
   auto options = reporting();
-  auto rules = parseSemanticRules(
-      "rule move { F(scale(?s, ?x)) => scale(?s, F(?x)) "
-      "where HomogeneousIn(F, 0) and Scalar(?s); }",
+  auto rules = compileRules(
+      {patterns::rule("move", pattern_F(patterns::scale(pattern_s, pattern_x)),
+                      patterns::scale(pattern_s, pattern_F(pattern_x)))
+           .when({patterns::homogeneous_in(pattern_F, 0),
+                  patterns::scalar(pattern_s)})},
       NumericalPolicy::PreserveEvaluation, options);
   auto count = graph.node_count();
   eggc::run(graph, rules);
@@ -393,14 +412,20 @@ TEST_F(SemanticRewriteTest,
       {OpKind::BroadcastInDim, BroadcastAttrs{{}, integer({2, 3})}, {scalar}});
   bounded.add({OpKind::Multiply, NoAttrs{}, {broadcast, value}});
   options.visit_limit = 2;
-  auto limited = parseSemanticRules(
-      "rule bounded { scale(?s, ?x) => scale(?s, ?x) where Scalar(?s); }",
+  auto limited = compileRules(
+      {patterns::rule("bounded", patterns::scale(pattern_s, pattern_x),
+                      patterns::scale(pattern_s, pattern_x))
+           .when({patterns::scalar(pattern_s)})},
       NumericalPolicy::PreserveEvaluation, options);
   auto result = eggc::run(bounded, limited);
   EXPECT_EQ(result.reason, eggc::StopReason::SearchLimit);
   EXPECT_GT(options.report->at("bounded").budget_stops, 0);
 }
 TEST_F(SemanticRewriteTest, StrictFloatScaleDoesNotReorderMultiplyOperands) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   auto scalar_type =
       mlir::RankedTensorType::get({}, mlir::Float32Type::get(&context));
   auto matrix_type =
@@ -415,9 +440,12 @@ TEST_F(SemanticRewriteTest, StrictFloatScaleDoesNotReorderMultiplyOperands) {
     auto root =
         graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {multiply}});
     auto options = reporting();
-    auto rules = parseSemanticRules(
-        "rule move { F(scale(?s, ?x)) => scale(?s, F(?x)) "
-        "where HomogeneousIn(F, 0) and Scalar(?s); }",
+    auto rules = compileRules(
+        {patterns::rule("move",
+                        pattern_F(patterns::scale(pattern_s, pattern_x)),
+                        patterns::scale(pattern_s, pattern_F(pattern_x)))
+             .when({patterns::homogeneous_in(pattern_F, 0),
+                    patterns::scalar(pattern_s)})},
         relaxed ? NumericalPolicy::AllowReassociation
                 : NumericalPolicy::PreserveEvaluation,
         options);
@@ -434,6 +462,10 @@ TEST_F(SemanticRewriteTest, StrictFloatScaleDoesNotReorderMultiplyOperands) {
   }
 }
 TEST_F(SemanticRewriteTest, ScaleFollowsNestedScalarBroadcasts) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto scalar = input(graph, 0, integer({}));
   auto x = input(graph, 1, integer({2, 3}));
@@ -444,9 +476,11 @@ TEST_F(SemanticRewriteTest, ScaleFollowsNestedScalarBroadcasts) {
   auto multiply = graph.add({OpKind::Multiply, NoAttrs{}, {second, x}});
   auto root =
       graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {multiply}});
-  auto rules = parseSemanticRules(
-      "rule move { F(scale(?s, ?x)) => scale(?s, F(?x)) "
-      "where HomogeneousIn(F, 0) and Scalar(?s); }");
+  auto rules = compileRules(
+      {patterns::rule("move", pattern_F(patterns::scale(pattern_s, pattern_x)),
+                      patterns::scale(pattern_s, pattern_F(pattern_x)))
+           .when({patterns::homogeneous_in(pattern_F, 0),
+                  patterns::scalar(pattern_s)})});
   eggc::run(graph, rules);
   auto transpose = graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {x}});
   auto broadcast = graph.add(
@@ -456,27 +490,38 @@ TEST_F(SemanticRewriteTest, ScaleFollowsNestedScalarBroadcasts) {
   EXPECT_EQ(graph.find(root), graph.find(expected));
 }
 TEST_F(SemanticRewriteTest, UniformPredicateAcceptsBroadcastOfScalar) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_value = patterns::tensor_var("value");
+
   TensorEGraph graph;
   auto scalar = input(graph, 0, integer({}));
   auto uniform = graph.add(
       {OpKind::BroadcastInDim, BroadcastAttrs{{}, integer({2, 3})}, {scalar}});
   auto negate = graph.add({OpKind::Negate, NoAttrs{}, {uniform}});
   auto root = graph.add({OpKind::Negate, NoAttrs{}, {negate}});
-  auto rules = parseSemanticRules(
-      "rule uniform { F(F(?value)) => ?value "
-      "where Involution(F) and Uniform(?value); }");
+  auto rules = compileRules(
+      {patterns::rule("uniform", pattern_F(pattern_F(pattern_value)),
+                      pattern_value)
+           .when({patterns::involution(pattern_F),
+                  patterns::uniform(pattern_value)})});
   eggc::run(graph, rules);
   EXPECT_EQ(graph.find(root), graph.find(uniform));
 }
 TEST_F(SemanticRewriteTest, ScaleOnRankZeroNeedsNoBroadcast) {
+  const auto pattern_F = patterns::operator_var("F", 1);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto s = input(graph, 0, integer({}));
   auto x = input(graph, 1, integer({}));
   auto product = graph.add({OpKind::Multiply, NoAttrs{}, {s, x}});
   auto root = graph.add({OpKind::Negate, NoAttrs{}, {product}});
-  auto rules = parseSemanticRules(
-      "rule move { F(scale(?s, ?x)) => scale(?s, F(?x)) "
-      "where HomogeneousIn(F, 0) and Scalar(?s); }");
+  auto rules = compileRules(
+      {patterns::rule("move", pattern_F(patterns::scale(pattern_s, pattern_x)),
+                      patterns::scale(pattern_s, pattern_F(pattern_x)))
+           .when({patterns::homogeneous_in(pattern_F, 0),
+                  patterns::scalar(pattern_s)})});
   eggc::run(graph, rules);
   auto negated = graph.add({OpKind::Negate, NoAttrs{}, {x}});
   auto expected = graph.add({OpKind::Multiply, NoAttrs{}, {s, negated}});
@@ -484,14 +529,19 @@ TEST_F(SemanticRewriteTest, ScaleOnRankZeroNeedsNoBroadcast) {
   EXPECT_TRUE(graph.classes_for_op(OpKind::BroadcastInDim).empty());
 }
 TEST_F(SemanticRewriteTest, NonScalarRhsScaleLeavesGraphUnchanged) {
+  const auto pattern_F = patterns::operator_var("F", 2);
+  const auto pattern_s = patterns::tensor_var("s");
+  const auto pattern_x = patterns::tensor_var("x");
+
   TensorEGraph graph;
   auto a = input(graph, 0, integer({2, 3}));
   auto b = input(graph, 1, integer({2, 3}));
   graph.add({OpKind::Add, NoAttrs{}, {a, b}});
   auto options = reporting();
-  auto rules = parseSemanticRules(
-      "rule bad { F(?s, ?x) => scale(?s, negate(?x)) "
-      "where Elementwise(F); }",
+  auto rules = compileRules(
+      {patterns::rule("bad", pattern_F(pattern_s, pattern_x),
+                      patterns::scale(pattern_s, patterns::negate(pattern_x)))
+           .when({patterns::elementwise(pattern_F)})},
       NumericalPolicy::PreserveEvaluation, options);
   auto count = graph.node_count();
   eggc::run(graph, rules);
@@ -515,6 +565,127 @@ TEST_F(SemanticRewriteTest, StandaloneInferenceDistinguishesUnknownAndInvalid) {
       inferTensorNode({OpKind::Transpose, TransposeAttrs{{0, 0}}, {0}}, known)
           .status,
       InferenceStatus::Invalid);
+}
+TEST_F(SemanticRewriteTest, CppDefinitionsValidateBindingsAndArity) {
+  using namespace patterns;
+  const auto x = tensor_var("x"), y = tensor_var("y");
+  const auto F = operator_var("F", 1), G = operator_var("G", 1);
+  EXPECT_THROW(F(x, y), std::invalid_argument);
+  EXPECT_THROW(operation(OpKind::Add, {x}), std::invalid_argument);
+  EXPECT_THROW(operation(OpKind::DotGeneral, {x, y}), std::invalid_argument);
+  EXPECT_THROW(linear_in(F, 1), std::invalid_argument);
+  EXPECT_THROW(compileRules({rule("unbound", F(x), y)}), std::invalid_argument);
+  EXPECT_THROW(compileRules({rule("unbound-op", F(x), G(x))}),
+               std::invalid_argument);
+  EXPECT_THROW(compileRules({rule("bad-guard", F(x), x).when(scalar(y))}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      compileRules({rule("bad-arity", F(x), operator_var("F", 2)(x, x))}),
+      std::invalid_argument);
+  EXPECT_THROW(compileRules({rule("missing-rhs", F(x))}),
+               std::invalid_argument);
+  EXPECT_THROW(compileRules({rule("bare-lhs", x, x)}), std::invalid_argument);
+  const auto good = rule("duplicate", F(F(x)), x).when(involution(F));
+  EXPECT_THROW(compileRules({good, good}), std::invalid_argument);
+  auto options = reporting();
+  options.enable_linearity = false;
+  // Validation still checks disabled definitions.
+  EXPECT_THROW(
+      compileRules({rule("disabled-invalid", F(x), y).when(linear_in(F, 0))},
+                   NumericalPolicy::PreserveEvaluation, options),
+      std::invalid_argument);
+  try {
+    compileRules({rule("diagnostic-name", F(x), y)});
+    FAIL();
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string(error.what()).find("diagnostic-name"),
+              std::string::npos);
+  }
+}
+TEST_F(SemanticRewriteTest, CopiedDefinitionsHaveIndependentGuards) {
+  using namespace patterns;
+  auto x = tensor_var("x");
+  auto F = operator_var("F", 1);
+  auto original = rule("cancel", F(F(x)), x).when(involution(F));
+  auto restricted = original;
+  restricted.when(scalar(x));
+  for (bool restrict : {false, true}) {
+    TensorEGraph graph;
+    auto value = input(graph, 0, integer());
+    auto inner = graph.add({OpKind::Negate, NoAttrs{}, {value}});
+    auto root = graph.add({OpKind::Negate, NoAttrs{}, {inner}});
+    eggc::run(graph, compileRules({restrict ? restricted : original}));
+    EXPECT_EQ(graph.find(root) == graph.find(value), !restrict);
+  }
+}
+TEST_F(SemanticRewriteTest, CallbackFailureNeverInsertsChildren) {
+  using namespace patterns;
+  const auto x = tensor_var("x");
+  const auto lhs = transpose(x, Axes{1, 0});
+  for (int mode = 0; mode < 5; ++mode) {
+    auto definition =
+        rule("callback", lhs).build([=](const Match& m, RhsBuilder& rhs) {
+          auto value = rhs.negate(rhs.ref(m[x]));
+          if (mode == 0) return rhs.reject("unsupported dimensions");
+          if (mode == 1) return rhs.transpose(value, {0, 0});
+          if (mode == 2) return value;  // Root shape differs.
+          if (mode == 3) return rhs.ref(m[tensor_var("missing")]);
+          return rhs.transpose(value, m[attribute_var<Axes>("missing")]);
+        });
+    TensorEGraph graph;
+    auto value = input(graph, 0, integer({2, 3}));
+    graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {value}});
+    auto count = graph.node_count();
+    auto options = reporting();
+    eggc::run(graph,
+              compileRules({definition}, NumericalPolicy::PreserveEvaluation,
+                           options));
+    EXPECT_EQ(graph.node_count(), count);
+    EXPECT_GT(options.report->at("callback").rejections.size(), 0);
+  }
+}
+TEST_F(SemanticRewriteTest, CallbackRechecksCapturedOperatorProperties) {
+  using namespace patterns;
+  const auto x = tensor_var("x");
+  const auto F = operator_var("F", 1);
+  const auto dynamic_type = integer({mlir::ShapedType::kDynamic});
+  // Broadcast inference can accept a dynamic input dimension. Its layout
+  // linearity contract requires static operands even when the output is static.
+  auto definition = rule("capture", F(x))
+                        .when(linear_in(F, 0))
+                        .build([=](const Match&, RhsBuilder& rhs) {
+                          auto dynamic = rhs.operation(
+                              OpKind::Input, InputAttrs{99, dynamic_type}, {});
+                          return rhs.apply(F, {dynamic});
+                        });
+  TensorEGraph graph;
+  auto value = input(graph, 0, integer({3}));
+  graph.add(
+      {OpKind::BroadcastInDim, BroadcastAttrs{{1}, integer({2, 3})}, {value}});
+  auto count = graph.node_count();
+  auto options = reporting();
+  eggc::run(graph, compileRules({definition},
+                                NumericalPolicy::PreserveEvaluation, options));
+  EXPECT_EQ(graph.node_count(), count);
+  EXPECT_GT(options.report->at("capture").rejections.count(
+                "RHS: layout algebra requires static shapes"),
+            0);
+}
+TEST_F(SemanticRewriteTest, CallbackRebuildsCapturedOperator) {
+  using namespace patterns;
+  const auto x = tensor_var("x"), y = tensor_var("y");
+  const auto F = operator_var("F", 2);
+  auto definition = rule("callback-swap", F(x, y))
+                        .when(commutative(F))
+                        .build([=](const Match& m, RhsBuilder& rhs) {
+                          return rhs.apply(F, {rhs.ref(m[y]), rhs.ref(m[x])});
+                        });
+  TensorEGraph graph;
+  auto a = input(graph, 0, integer()), b = input(graph, 1, integer());
+  auto root = graph.add({OpKind::Add, NoAttrs{}, {a, b}});
+  eggc::run(graph, compileRules({definition}));
+  auto expected = graph.add({OpKind::Add, NoAttrs{}, {b, a}});
+  EXPECT_EQ(graph.find(root), graph.find(expected));
 }
 }  // namespace
 

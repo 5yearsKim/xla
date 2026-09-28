@@ -138,7 +138,7 @@ std::optional<TensorNode> importNode(mlir::Operation* op) {
         {0, 0}};
   }
   const OpSchema* schema = lookupOpSchema(name.str());
-  // StableHLO calls this exponential; TensorLang's DSL uses exp.
+  // StableHLO calls this exponential; TensorLang uses exp.
   if (name == "stablehlo.exponential") schema = opSchema(OpKind::Exp);
   if (!schema || !schema->attribute_free || !knownAttributes(op, {})) return {};
   return TensorNode{schema->op, NoAttrs{},

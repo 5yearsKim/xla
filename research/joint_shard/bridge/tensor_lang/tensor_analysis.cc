@@ -89,6 +89,74 @@ bool canonicalReductionIdentity(const ReduceAttrs& attrs, mlir::Type element) {
   return false;
 }
 
+InferenceResult inferDotResultType(const DotGeneralAttrs& attrs,
+                                   std::span<const TensorFacts> operands) {
+  if (operands.size() != 2) return invalid("dot requires two operands");
+  if (!operands[0].type || !operands[1].type)
+    return {InferenceStatus::Unknown, {}, "unknown dot operand type"};
+  auto lhs = operands[0].type, rhs = operands[1].type;
+  auto element = lhs.getElementType();
+  if (!numeric(element) || rhs.getElementType() != element ||
+      lhs.getEncoding() || rhs.getEncoding())
+    return invalid("unsupported dot element types or encodings");
+  if (attrs.lhs_contracting.size() != attrs.rhs_contracting.size() ||
+      attrs.lhs_batching.size() != attrs.rhs_batching.size())
+    return invalid("dot dimension list lengths differ");
+  auto l = attrs.lhs_batching, r = attrs.rhs_batching;
+  l.insert(l.end(), attrs.lhs_contracting.begin(), attrs.lhs_contracting.end());
+  r.insert(r.end(), attrs.rhs_contracting.begin(), attrs.rhs_contracting.end());
+  if (!axesValid(l, lhs.getRank()) || !axesValid(r, rhs.getRank()))
+    return invalid("dot axes overlap or are out of range");
+  for (unsigned i = 0; i < l.size(); ++i)
+    if (!compatible(lhs.getDimSize(l[i]), rhs.getDimSize(r[i])))
+      return invalid("dot paired dimensions differ");
+  std::vector<int64_t> shape;
+  for (auto axis : attrs.lhs_batching) shape.push_back(lhs.getDimSize(axis));
+  for (int64_t axis = 0; axis < lhs.getRank(); ++axis)
+    if (std::find(l.begin(), l.end(), axis) == l.end())
+      shape.push_back(lhs.getDimSize(axis));
+  for (int64_t axis = 0; axis < rhs.getRank(); ++axis)
+    if (std::find(r.begin(), r.end(), axis) == r.end())
+      shape.push_back(rhs.getDimSize(axis));
+  if (attrs.extra_attributes)
+    for (auto attr : attrs.extra_attributes)
+      if (attr.getName().getValue() == "dot_dimension_numbers" ||
+          attr.getName().getValue() == "precision_config" ||
+          attr.getName().getValue() == "algorithm")
+        return invalid("dot has duplicate managed attributes");
+  return known(mlir::RankedTensorType::get(shape, element));
+}
+
+mlir::ElementsAttr canonicalReductionInitializer(ReduceKind kind,
+                                                 mlir::Type element) {
+  auto scalar = mlir::RankedTensorType::get({}, element);
+  if (auto i = llvm::dyn_cast<mlir::IntegerType>(element)) {
+    if (i.getWidth() <= 1) return {};
+    llvm::APInt value(i.getWidth(), kind == ReduceKind::Product ? 1 : 0);
+    if (kind == ReduceKind::Max)
+      value = i.isUnsigned() ? llvm::APInt::getMinValue(i.getWidth())
+                             : llvm::APInt::getSignedMinValue(i.getWidth());
+    if (kind == ReduceKind::Min)
+      value = i.isUnsigned() ? llvm::APInt::getMaxValue(i.getWidth())
+                             : llvm::APInt::getSignedMaxValue(i.getWidth());
+    return mlir::DenseElementsAttr::get(scalar, value);
+  }
+  if (auto f = llvm::dyn_cast<mlir::FloatType>(element)) {
+    llvm::APFloat value(f.getFloatSemantics());
+    if (kind == ReduceKind::Product) {
+      value = llvm::APFloat(1.0);
+      bool loses_info = false;
+      value.convert(f.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven,
+                    &loses_info);
+    }
+    if (kind == ReduceKind::Max || kind == ReduceKind::Min)
+      value =
+          llvm::APFloat::getInf(f.getFloatSemantics(), kind == ReduceKind::Max);
+    return mlir::DenseElementsAttr::get(scalar, value);
+  }
+  return {};
+}
+
 InferenceResult inferTensorNode(const TensorNode& node,
                                 std::span<const TensorFacts> operands) {
   if (!validNodeSchema(node) || operands.size() != node.operands.size())
@@ -188,41 +256,15 @@ InferenceResult inferTensorNode(const TensorNode& node,
   }
   if (node.op == OpKind::DotGeneral) {
     const auto& attrs = std::get<DotGeneralAttrs>(node.attrs);
-    auto rhs = operands[1].type;
-    if (!numeric(element) || rhs.getElementType() != element ||
-        !attrs.result_type || attrs.result_type.getElementType() != element ||
-        lhs.getEncoding() || rhs.getEncoding() ||
-        attrs.result_type.getEncoding())
-      return invalid("unsupported dot element types or encodings");
-    if (attrs.lhs_contracting.size() != attrs.rhs_contracting.size() ||
-        attrs.lhs_batching.size() != attrs.rhs_batching.size())
-      return invalid("dot dimension list lengths differ");
-    auto l = attrs.lhs_batching, r = attrs.rhs_batching;
-    l.insert(l.end(), attrs.lhs_contracting.begin(),
-             attrs.lhs_contracting.end());
-    r.insert(r.end(), attrs.rhs_contracting.begin(),
-             attrs.rhs_contracting.end());
-    if (!axesValid(l, lhs.getRank()) || !axesValid(r, rhs.getRank()))
-      return invalid("dot axes overlap or are out of range");
-    for (unsigned i = 0; i < l.size(); ++i)
-      if (!compatible(lhs.getDimSize(l[i]), rhs.getDimSize(r[i])))
-        return invalid("dot paired dimensions differ");
-    std::vector<int64_t> shape;
-    for (auto axis : attrs.lhs_batching) shape.push_back(lhs.getDimSize(axis));
-    for (int64_t axis = 0; axis < lhs.getRank(); ++axis)
-      if (std::find(l.begin(), l.end(), axis) == l.end())
-        shape.push_back(lhs.getDimSize(axis));
-    for (int64_t axis = 0; axis < rhs.getRank(); ++axis)
-      if (std::find(r.begin(), r.end(), axis) == r.end())
-        shape.push_back(rhs.getDimSize(axis));
+    auto result = inferDotResultType(attrs, operands);
+    if (!result.valid()) return result;
+    if (!attrs.result_type || attrs.result_type.getEncoding() ||
+        attrs.result_type.getElementType() != element)
+      return invalid("unsupported dot result type or encoding");
+    std::vector<int64_t> shape(result.facts.type.getShape().begin(),
+                               result.facts.type.getShape().end());
     if (!sameShape(attrs.result_type, shape))
       return invalid("dot result shape differs from inferred shape");
-    if (attrs.extra_attributes)
-      for (auto attr : attrs.extra_attributes)
-        if (attr.getName().getValue() == "dot_dimension_numbers" ||
-            attr.getName().getValue() == "precision_config" ||
-            attr.getName().getValue() == "algorithm")
-          return invalid("dot has duplicate managed attributes");
     return known(attrs.result_type);
   }
   return invalid("operator inference is not implemented");

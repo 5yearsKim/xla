@@ -178,7 +178,11 @@ absl::StatusOr<ExportedSelectedProgram> exportSelectedProgram(
 
   mlir::PassManager exporter(context);
   exporter.enableVerifier(true);
-  xla::sdy::addStablehloExportPipeline(exporter);
+  xla::sdy::StablehloExportPipelineOptions export_options;
+  // PJRT imports StableHLO, not MHLO copy operations. Keep boundary layout
+  // anchors as supported @Sharding custom calls using the upstream option.
+  export_options.keepHloShardingConstraints = true;
+  xla::sdy::addStablehloExportPipeline(exporter, export_options);
   if (mlir::failed(exporter.run(*result.module)))
     return invalid("XLA Shardy export failed");
   return result;

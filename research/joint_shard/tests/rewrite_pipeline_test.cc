@@ -276,6 +276,87 @@ TEST_F(RewritePipelineTest, EmptyReductionRetainsCanonicalInitializer) {
               0.0f);
   });
 }
+TEST_F(RewritePipelineTest,
+       AttributeDslReassociatesRectangularDotsAndPreservesPrecision) {
+  for (bool relaxed : {false, true}) {
+    auto module = parse(R"mlir(module {
+      func.func @main(%a: tensor<8x3xf32>, %b: tensor<3x5xf32>, %c: tensor<5x2xf32>) -> tensor<8x2xf32> {
+        %ab = stablehlo.dot_general %a, %b, contracting_dims = [1] x [0], precision = [DEFAULT, DEFAULT]
+          : (tensor<8x3xf32>, tensor<3x5xf32>) -> tensor<8x5xf32>
+        %abc = stablehlo.dot_general %ab, %c, contracting_dims = [1] x [0], precision = [DEFAULT, DEFAULT]
+          : (tensor<8x5xf32>, tensor<5x2xf32>) -> tensor<8x2xf32>
+        return %abc : tensor<8x2xf32>
+      }
+    })mlir");
+    ASSERT_TRUE(module);
+    ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    TensorRewriteOptions options;
+    options.numerical_policy = relaxed ? NumericalPolicy::AllowReassociation
+                                       : NumericalPolicy::PreserveEvaluation;
+    options.semantic.report =
+        std::make_shared<std::map<std::string, SemanticRuleStats>>();
+    ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module, options)));
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
+    auto ret = llvm::cast<mlir::func::ReturnOp>(
+        function.getBody().front().getTerminator());
+    auto outer =
+        ret.getOperand(0).getDefiningOp<mlir::stablehlo::DotGeneralOp>();
+    ASSERT_TRUE(outer);
+    if (relaxed) {
+      EXPECT_EQ(outer.getLhs(), function.getArgument(0));
+      auto inner =
+          outer.getRhs().getDefiningOp<mlir::stablehlo::DotGeneralOp>();
+      ASSERT_TRUE(inner);
+      EXPECT_EQ(inner.getLhs(), function.getArgument(1));
+      EXPECT_EQ(inner.getRhs(), function.getArgument(2));
+      EXPECT_EQ(inner.getType(), mlir::RankedTensorType::get(
+                                     {3, 2}, mlir::Float32Type::get(&context)));
+      EXPECT_EQ(inner->getAttr("precision_config"),
+                outer->getAttr("precision_config"));
+      EXPECT_GT(options.semantic.report->at("reassociate-matrix-right").applied,
+                0);
+    } else {
+      EXPECT_EQ(outer.getRhs(), function.getArgument(2));
+      EXPECT_TRUE(
+          outer.getLhs().getDefiningOp<mlir::stablehlo::DotGeneralOp>());
+      EXPECT_EQ(options.semantic.report->at("reassociate-matrix-right").applied,
+                0);
+    }
+  }
+}
+TEST_F(RewritePipelineTest,
+       AttributeDslMovesSumAcrossDotAndRebuildsCanonicalReducer) {
+  auto module = parse(R"mlir(module {
+    func.func @main(%x: tensor<2x5x3xi32>, %w: tensor<3x7xi32>) -> tensor<2x7xi32> {
+      %projected = stablehlo.dot_general %x, %w, contracting_dims = [2] x [0]
+        : (tensor<2x5x3xi32>, tensor<3x7xi32>) -> tensor<2x5x7xi32>
+      %zero = stablehlo.constant dense<0> : tensor<i32>
+      %sum = stablehlo.reduce(%projected init: %zero) applies stablehlo.add across dimensions = [1]
+        : (tensor<2x5x7xi32>, tensor<i32>) -> tensor<2x7xi32>
+      return %sum : tensor<2x7xi32>
+    }
+  })mlir");
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  TensorRewriteOptions options;
+  options.numerical_policy = NumericalPolicy::PreserveEvaluation;
+  ASSERT_TRUE(mlir::succeeded(rewriteUnconstrainedRegions(*module, options)));
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+  auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
+  auto ret = llvm::cast<mlir::func::ReturnOp>(
+      function.getBody().front().getTerminator());
+  auto dot = ret.getOperand(0).getDefiningOp<mlir::stablehlo::DotGeneralOp>();
+  ASSERT_TRUE(dot);
+  EXPECT_EQ(dot.getRhs(), function.getArgument(1));
+  EXPECT_EQ(dot.getDotDimensionNumbers().getLhsContractingDimensions()[0], 1);
+  auto reduce = dot.getLhs().getDefiningOp<mlir::stablehlo::ReduceOp>();
+  ASSERT_TRUE(reduce);
+  EXPECT_EQ(reduce->getOperand(0), function.getArgument(0));
+  EXPECT_EQ(reduce->getResult(0).getType(),
+            mlir::RankedTensorType::get({2, 3},
+                                        mlir::IntegerType::get(&context, 32)));
+}
 }  // namespace
 
 }  // namespace joint_shard

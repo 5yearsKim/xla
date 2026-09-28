@@ -34,11 +34,10 @@ std::chrono::milliseconds positiveMilliseconds(std::string_view text) {
 }  // namespace
 
 void addRewriteCliOptions(cxxopts::Options& options) {
-  options.add_options("Rewrite")("rules", "Path to a tensor rewrite rules file",
+  options.add_options("Rewrite")("numerical-policy",
+                                 "Floating-point policy: strict or relaxed",
                                  cxxopts::value<std::string>())(
-      "numerical-policy", "Floating-point policy: strict or relaxed",
-      cxxopts::value<std::string>())("iterations", "Rewrite iteration limit",
-                                     cxxopts::value<std::string>())(
+      "iterations", "Rewrite iteration limit", cxxopts::value<std::string>())(
       "nodes", "E-graph node limit", cxxopts::value<std::string>())(
       "matches", "Rewrite match limit", cxxopts::value<std::string>())(
       "search-visits", "Semantic search visit limit",
@@ -62,7 +61,12 @@ void addRewriteCliOptions(cxxopts::Options& options) {
       "allow-fp-distribute", "Allow floating-point distribution")(
       "assume-finite", "Assume floating-point values are finite")(
       "ignore-signed-zero", "Ignore signed zero")(
-      "allow-dot-arithmetic", "Allow arithmetic rewrites of dot products");
+      "allow-dot-arithmetic", "Allow arithmetic rewrites of dot products")(
+      "allow-dot-division",
+      "Allow moving division across dot (nonzero finite denominators, "
+      "tolerable range changes)")("allow-raw-moments",
+                                  "Allow aggressive centered-square to "
+                                  "raw-moment reduction (cancellation risk)");
 }
 
 bool applyRewriteCliOption(const std::string& name, const std::string& value,
@@ -84,6 +88,10 @@ bool applyRewriteCliOption(const std::string& name, const std::string& value,
     permission = &NumericalPermissions::ignore_signed_zero;
   else if (name == "allow-dot-arithmetic")
     permission = &NumericalPermissions::rewrite_dot_arithmetic;
+  else if (name == "allow-dot-division")
+    permission = &NumericalPermissions::rewrite_dot_division;
+  else if (name == "allow-raw-moments")
+    permission = &NumericalPermissions::rewrite_raw_moments;
   if (permission) {
     if (!options.semantic.permissions)
       options.semantic.permissions =
@@ -91,10 +99,7 @@ bool applyRewriteCliOption(const std::string& name, const std::string& value,
     (*options.semantic.permissions).*permission = parseBoolean(value);
     return true;
   }
-  if (name == "rules") {
-    if (value.empty()) throw std::invalid_argument("empty rule path");
-    options.rules_file = value;
-  } else if (name == "numerical-policy") {
+  if (name == "numerical-policy") {
     if (value == "strict")
       options.numerical_policy = NumericalPolicy::PreserveEvaluation;
     else if (value == "relaxed")

@@ -74,6 +74,40 @@ TEST(RewriteCliOptionsTest, RegisteredOptionsApplyInCommandLineOrder) {
   EXPECT_EQ(options.dag.state_limit, 17);
   EXPECT_FALSE(options.print_egraph);
 }
+TEST(RewriteCliOptionsTest, DotDivisionPermissionCanBeDisabledIndependently) {
+  cxxopts::Options cli("test");
+  addRewriteCliOptions(cli);
+  const char* argv[] = {"test", "--numerical-policy=relaxed",
+                        "--allow-dot-division=false"};
+  auto parsed = cli.parse(3, argv);
+  TensorRewriteOptions options;
+  for (const auto& argument : parsed.arguments())
+    ASSERT_TRUE(
+        applyRewriteCliOption(argument.key(), argument.value(), options));
+  ASSERT_TRUE(options.semantic.permissions);
+  EXPECT_FALSE(options.semantic.permissions->rewrite_dot_division);
+  EXPECT_TRUE(options.semantic.permissions->rewrite_dot_arithmetic);
+  EXPECT_TRUE(options.semantic.permissions->reassociate_floating_point);
+  EXPECT_TRUE(applyRewriteCliOption("numerical-policy", "strict", options));
+  EXPECT_FALSE(
+      numericalPermissions(options.numerical_policy).rewrite_dot_division);
+  EXPECT_TRUE(applyRewriteCliOption("numerical-policy", "relaxed", options));
+  EXPECT_TRUE(
+      numericalPermissions(options.numerical_policy).rewrite_dot_division);
+}
+TEST(RewriteCliOptionsTest, RawMomentsRequireExplicitOptIn) {
+  TensorRewriteOptions options;
+  for (auto policy : {"strict", "relaxed"}) {
+    ASSERT_TRUE(applyRewriteCliOption("numerical-policy", policy, options));
+    EXPECT_FALSE(
+        numericalPermissions(options.numerical_policy).rewrite_raw_moments);
+    ASSERT_TRUE(applyRewriteCliOption("allow-raw-moments", "true", options));
+    ASSERT_TRUE(options.semantic.permissions);
+    EXPECT_TRUE(options.semantic.permissions->rewrite_raw_moments);
+    ASSERT_TRUE(applyRewriteCliOption("allow-raw-moments", "false", options));
+    EXPECT_FALSE(options.semantic.permissions->rewrite_raw_moments);
+  }
+}
 }  // namespace
 
 }  // namespace joint_shard

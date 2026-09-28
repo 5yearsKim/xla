@@ -54,7 +54,7 @@ module {
                                   function.getArgument(1)};
   for (unsigned i = 0; i < inputs.size(); ++i) importer.bindValue(inputs[i], i);
   auto root = importer.importValue(ret.getOperand(0));
-  eggc::run(graph, parseSemanticRules(defaultSemanticRules()));
+  eggc::run(graph, buildSemanticRules());
   const auto& addNode = graph.nodes(root).front();
   const auto& dotNode = graph.nodes(addNode.operands[0]).front();
   ASSERT_EQ(dotNode.op, OpKind::DotGeneral);

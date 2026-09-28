@@ -42,7 +42,8 @@ uv run --locked python run.py \
 
 The runner creates enough logical CPU devices for the exported partition count.
 `--platform=gpu` uses an installed matching JAX GPU plugin and needs enough
-physical GPUs on one host. GPU execution has not yet been validated here.
+physical GPUs on one host. The four-arm experiment adds GPU numerical and
+synchronized latency checks; see [the recorded report](../joint_shard/results/four_arm/REPORT.md).
 
 Execution uses seeded global f32 inputs by default (`--seed=42`). For real
 inputs, pass an NPZ with keys `arg0`, `arg1`, etc., using `--inputs=...`.
@@ -72,3 +73,33 @@ uv run --locked python test_run.py -v
 The C++ export test checks source preservation, collective counts, and invalid
 input contracts. The Python test checks both optimizer artifacts, compilation,
 numerical chain/residual results, NPZ inputs/outputs, and XLA dumps on CPU.
+
+## Benchmark selected four-arm programs
+
+First generate inputs and all selected artifacts with
+`joint_shard_python/experiments/four_arm.py`, as described in
+[its README](../joint_shard_python/README.md#four-arm-experiment-and-aggressive-layernorm).
+From this directory:
+
+```sh
+CUDA_VISIBLE_DEVICES=0,2,3,4 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_enable_triton_gemm=false \
+  uv run --with 'jax[cuda12]==0.11.2' python benchmark_four_arm.py \
+  /tmp/joint_four_arm --platform=gpu --warmup=5 --repeats=30
+```
+
+Choose four available GPU IDs on your host. The optional CUDA dependency supplies
+the matching prebuilt plugin and runtime libraries without changing the CPU
+environment. `--platform=cpu` checks distributed CPU execution instead.
+`--case=layernorm_linear.hidden.favorable` selects one case.
+The recorded run uses the shown TF32/Triton settings because default GPU matmul
+settings failed the strict reference tolerance on the original baseline. The
+selected arithmetic and shardings are preserved; backend code generation changes.
+
+The benchmark compiles each exact exported arm, uploads inputs once, warms up,
+rotates arm order, and waits for every output shard after every timed call.
+Compilation and host/device transfers are excluded; Python/PJRT dispatch is
+included. Global outputs must match saved independent numerical references.
+`accelerator.json` records all samples, numerical errors, failures, and a device
+snapshot; `ACCELERATOR.md` summarizes medians. Shared device load and single-run
+noise mean a lower median alone is not established performance evidence.

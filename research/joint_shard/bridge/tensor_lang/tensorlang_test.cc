@@ -102,8 +102,7 @@ TEST_F(TensorLangTest, SemanticRulesCommuteStaticAdd) {
   auto b = graph.add(TensorNode{OpKind::Input, InputAttrs{1, type}, {}});
   auto add = OpKind::Add;
   auto root = graph.add(TensorNode{add, NoAttrs{}, {a, b}});
-  auto rules = parseSemanticRules(defaultSemanticRules(),
-                                  NumericalPolicy::AllowReassociation);
+  auto rules = buildSemanticRules(NumericalPolicy::AllowReassociation);
   auto report = eggc::run(graph, rules);
   EXPECT_EQ(report.reason, eggc::StopReason::Saturated);
   auto reversed = graph.add(TensorNode{add, NoAttrs{}, {b, a}});
@@ -118,7 +117,7 @@ TEST_F(TensorLangTest, DynamicShapeSyntaxDoesNotProveRuntimeShapeEquality) {
   auto b = graph.add(TensorNode{OpKind::Input, InputAttrs{1, type}, {}});
   auto add = OpKind::Add;
   auto root = graph.add(TensorNode{add, NoAttrs{}, {a, b}});
-  auto report = eggc::run(graph, parseSemanticRules(defaultSemanticRules()));
+  auto report = eggc::run(graph, buildSemanticRules());
   ASSERT_FALSE(report.history.empty());
   EXPECT_GT(report.history[0].condition_rejections, 0);
   auto reversed = graph.add(TensorNode{add, NoAttrs{}, {b, a}});

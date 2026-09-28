@@ -5,6 +5,7 @@
 
 namespace joint_shard {
 namespace semantic_detail {
+namespace {
 // Follow only broadcasts: this keeps scalar identity explicit and does not
 // invent a scalar from a tensor splat. All helper searches share rule budgets.
 using ScalarSink = std::function<bool(eggc::Id)>;
@@ -25,19 +26,20 @@ bool findScalars(eggc::Id id, const TensorEGraph& graph, SearchState& state,
   }
   return true;
 }
+}  // namespace
 // Depth-first streaming matching; no intermediate Cartesian-product lists.
 bool matchTerm(const Term& term, eggc::Id id, const TensorEGraph& graph,
                const Bindings& initial, SearchState& state,
                const BindingSink& sink) {
   if (state.cancelled()) return false;
   id = graph.find(id);
-  if (term.variable) {
+  if (term.kind == TermKind::TensorVariable) {
     Bindings next = initial;
     auto [found, inserted] = next.tensors.emplace(term.name, id);
     if (!inserted && graph.find(found->second) != id) return true;
     return sink(next);
   }
-  if (term.name == "scale") {
+  if (term.kind == TermKind::Scale) {
     for (const auto& node : graph.nodes(id)) {
       if (state.cancelled()) return false;
       ++state.visits;
@@ -73,21 +75,23 @@ bool matchTerm(const Term& term, eggc::Id id, const TensorEGraph& graph,
     }
     return true;
   }
-  const auto* schema = lookupOpSchema(term.name);
+  const auto* schema =
+      term.kind == TermKind::ConcreteOperator ? opSchema(term.op) : nullptr;
   for (const auto& node : graph.nodes(id)) {
     if (state.cancelled()) return false;
     ++state.visits;
     ++state.stats.node_visits;
     if (node.operands.size() != term.children.size()) continue;
-    if (schema &&
-        (node.op != schema->op || !std::holds_alternative<NoAttrs>(node.attrs)))
-      continue;
+    if (schema && node.op != schema->op) continue;
     Bindings bound = initial;
-    if (!schema) {
+    if (term.kind == TermKind::OperatorVariable) {
       auto& occurrences = bound.operators[term.name];
       if (!occurrences.empty() && !occurrences.front().node.matches(node))
         continue;
       occurrences.push_back({node, id});
+    } else {
+      if (!matchAttributes(term, node, bound)) continue;
+      bound.concrete.push_back({node, id});
     }
     const auto children = [&](auto&& self, size_t index,
                               const Bindings& binding) -> bool {
@@ -124,11 +128,22 @@ bool isUniformTensor(const TensorEGraph& graph, eggc::Id id,
 std::string bindingKey(eggc::Id root, const Bindings& bindings) {
   std::vector<std::string> entries;
   for (const auto& [name, id] : bindings.tensors)
-    entries.push_back(name + "=" + std::to_string(id));
+    entries.push_back("tensor:" + name + "=" + std::to_string(id));
   for (const auto& [name, occurrences] : bindings.operators)
     for (const auto& occurrence : occurrences)
       entries.push_back(name + "=" + std::to_string(occurrence.eclass) + ":" +
                         occurrence.node.format());
+  for (const auto& [name, value] : bindings.attributes)
+    entries.push_back("attribute:" + name + "=" + formatAttribute(value));
+  for (size_t i = 0; i < bindings.concrete.size(); ++i) {
+    const auto& occurrence = bindings.concrete[i];
+    std::string entry = "concrete:" + std::to_string(i) + "=" +
+                        std::to_string(occurrence.eclass) + ":" +
+                        occurrence.node.format();
+    for (auto operand : occurrence.node.operands)
+      entry += ":" + std::to_string(operand);
+    entries.push_back(std::move(entry));
+  }
   std::sort(entries.begin(), entries.end());
   std::string key = std::to_string(root);
   for (const auto& entry : entries)

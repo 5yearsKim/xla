@@ -37,18 +37,13 @@ Candidate canonicalize(const Candidate& candidate) {
 }  // namespace
 
 CompiledTensorRules compileTensorRules(const TensorRewriteOptions& options) {
-  auto rules =
-      options.rules_file.empty()
-          ? parseSemanticRules(defaultSemanticRules(), options.numerical_policy,
-                               options.semantic)
-          : loadSemanticRulesFile(options.rules_file, options.numerical_policy,
-                                  options.semantic);
+  auto rules = buildSemanticRules(options.numerical_policy, options.semantic);
   auto attributeRules = buildAttributeRewrites();
   rules.insert(rules.end(), attributeRules.begin(), attributeRules.end());
   std::unordered_set<std::string> names;
   for (const auto& rule : rules)
     if (!names.insert(rule.name).second)
-      throw std::invalid_argument("duplicate DSL/C++ rule name: " + rule.name);
+      throw std::invalid_argument("duplicate rule name: " + rule.name);
   return CompiledTensorRules(std::move(rules));
 }
 

@@ -44,6 +44,12 @@ struct NumericalPermissions {
   bool assume_finite = false;
   bool ignore_signed_zero = false;
   bool rewrite_dot_arithmetic = false;
+  // Nonzero finite denominators and tolerable range/rounding changes are the
+  // caller's responsibility. This permission never enables integer division.
+  bool rewrite_dot_division = false;
+  // Explicitly aggressive: raw moments can suffer catastrophic cancellation.
+  // Kept disabled by every preset, including AllowReassociation.
+  bool rewrite_raw_moments = false;
 };
 NumericalPermissions numericalPermissions(NumericalPolicy policy);
 struct PropertyDecision {

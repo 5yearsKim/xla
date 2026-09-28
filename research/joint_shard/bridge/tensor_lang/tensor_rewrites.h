@@ -3,7 +3,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "eggc/rewrite.hpp"
@@ -27,25 +26,21 @@ struct SemanticRuleOptions {
   std::size_t visit_limit = 100000;
   std::size_t match_limit = 10000;
   std::shared_ptr<std::map<std::string, SemanticRuleStats>> report;
-  std::string source_name = "<semantic rules>";
   std::optional<NumericalPermissions> permissions;
   bool enable_associativity = true;
   bool enable_linearity = true;
   bool enable_homogeneity = true;
 };
 std::vector<TensorRewrite> buildAttributeRewrites();
-std::string_view defaultSemanticRules();
-
-// Parse semantic rewrite declarations and lower them to TensorLang custom
-// search rules. Operator predicates use the shared OpProperty registry;
-// Scalar(?v)/Uniform(?v) query value facts. scale(?s, ?x) matches scalar
-// broadcast multiplication and constructs a broadcast at the RHS tensor shape.
-std::vector<TensorRewrite> parseSemanticRules(
-    std::string_view source,
+namespace patterns {
+class RuleDefinition;
+}
+// Compile trusted C++ pattern definitions to bounded, checked rewrite rules.
+std::vector<TensorRewrite> compileRules(
+    std::vector<patterns::RuleDefinition> definitions,
     NumericalPolicy policy = NumericalPolicy::PreserveEvaluation,
     SemanticRuleOptions options = {});
-std::vector<TensorRewrite> loadSemanticRulesFile(
-    std::string_view path,
+std::vector<TensorRewrite> buildSemanticRules(
     NumericalPolicy policy = NumericalPolicy::PreserveEvaluation,
     SemanticRuleOptions options = {});
 }  // namespace joint_shard

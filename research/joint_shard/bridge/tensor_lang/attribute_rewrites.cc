@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <numeric>
 
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
 

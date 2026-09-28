@@ -10,12 +10,15 @@ No descriptor table, operator-string encoding, or TensorLang dependency in
 | `tensorlang.h/.cc` | Native nodes, typed semantic attrs, shared operator schema, equality/hash |
 | `tensor_analysis.h/.cc` | Standalone inference and monotone e-class type/constant facts |
 | `op_properties.h/.cc` | Candidate properties by OpKind and contextual decisions with rejection reasons |
-| `semantic_rewrite.cc` | Public DSL entry points, file loading, embedded default rules |
-| `semantic_rule_parser.cc` | DSL parsing and structural validation |
-| `semantic_rule_matcher.cc` | Bounded streaming matching and value predicates |
+| `tensor_patterns.h/.cc` | Typed C++ pattern builders, guards and checked callback expressions |
+| `semantic_rewrite.cc` | Pattern compilation and rule-group filtering |
+| `semantic_rule_validation.cc` | Variable bindings, arities and rule definition validation |
+| `semantic_rule_matcher.cc` | Bounded streaming tensor/operator/attribute matching and value predicates |
+| `semantic_rule_attributes.cc` | Typed field contracts, concrete attribute matching and checked RHS construction |
+| `semantic_rule_guards.cc` | Numerical guards for dedicated arithmetic rules |
 | `semantic_rule_application.cc` | Property checks, complete RHS preparation and rule application |
 | `semantic_rule_internal.h` | Private AST, binding and search contracts |
-| `tensor.rules` | Default declarative rules, embedded into the library during Bazel builds |
+| `tensor_rules.cc` | Default C++ definitions and dot signature table |
 | `attribute_rewrites.cc` | Computed-attribute shape and dot rewrites |
 | `tensor_rewrites.h` | Public semantic/attribute rule APIs and diagnostic types |
 | `../stablehlo_importer.cc`, `../stablehlo_exporter.cc` | Conservative MLIR admission and typed round trips |
@@ -38,7 +41,7 @@ and arity while ignoring operand IDs. MLIR handles in attrs are immutable and
 context-owned; retain the context throughout graph use and export.
 
 `opSchemas` / `opSchema` / `lookupOpSchema` provide names, arities, and whether
-a concrete DSL operator can use `NoAttrs`. Add new operations here and implement attribute
+a concrete pattern operator can use `NoAttrs`. Add new operations here and implement attribute
 validation, inference, importer, and exporter together. Property-indexed semantic
 search iterates registered schemas rather than relying on enum ordering.
 
@@ -88,83 +91,192 @@ dots are not supported by the current inference contract.
 For narrower permissions, set `PropertyContext::permissions` or
 `SemanticRuleOptions::permissions`. The CLI accepts `--allow-fp-reorder`,
 `--allow-fp-reassociate`, `--allow-fp-distribute`, `--assume-finite`,
-`--ignore-signed-zero`, and `--allow-dot-arithmetic`. A numerical-policy option
+`--ignore-signed-zero`, `--allow-dot-arithmetic`, and `--allow-dot-division`.
+Moving division across a dot additionally assumes nonzero finite denominators
+and tolerable changes in intermediate range and rounding. Relaxed mode enables
+this permission; `--numerical-policy=relaxed --allow-dot-division=false` disables
+it independently. The engine does not prove these runtime assumptions.
+A numerical-policy option
 resets overrides; flags following it refine that preset.
 
-## Semantic DSL
+`--allow-raw-moments` is a separate aggressive permission, disabled in **every**
+preset, including relaxed. Use
+`--numerical-policy=relaxed --allow-raw-moments` to enable centered-square
+reductions to raw moments. This deliberately accepts cancellation and possible
+negative variance; it does not clamp or stabilize the replacement. The other
+floating reassociation/distribution, finite-value, and signed-zero permissions
+must also be enabled.
 
-```text
-rule factor-right-linear-operator-from-add {
-  add(F(?a, ?x), F(?a, ?y)) => F(?a, add(?x, ?y))
-  where LinearIn(F, 1);
-}
+## C++ pattern definitions
 
-rule commute-elementwise {
-  F(?x, ?y) => F(?y, ?x)
-  where Elementwise(F) and Commutative(F);
-}
+Include `bridge/tensor_lang/tensor_patterns.h` and use the
+`joint_shard::patterns` namespace. Tensor, operator, and attribute variables are
+explicit C++ types; capitalization has no meaning. Concrete operation builders
+use `OpKind`, and operator variables capture kind, complete attrs, and arity.
+
+```cpp
+using namespace joint_shard;
+using namespace joint_shard::patterns;
+const auto a = tensor_var("a"), x = tensor_var("x"), y = tensor_var("y");
+const auto F = operator_var("F", 2);
+auto definition = rule("factor-right", add(F(a, x), F(a, y)),
+                       F(a, add(x, y)))
+                      .when(linear_in(F, 1));
+auto rewrites = compileRules({definition}, NumericalPolicy::AllowReassociation);
 ```
 
-Tensor variables begin with `?`. Operator variables start uppercase. Concrete
-names resolve through the schema and currently require attribute-free operators;
-attribute-bearing operators are captured as variables or handled in C++ rules.
-Load validation checks rule-name uniqueness, concrete names/arity, consistent
-operator-variable arity, bound RHS variables/operators, and predicate indices.
-Diagnostics include the source path and line/column; semantic validation points
-to the rule's declaration line.
+`rule(name, lhs, rhs).when(...)` describes an equation. `.when` accepts one
+guard or an initializer list of guards. Copying a definition and adding guards
+leaves the original unchanged. Concrete attribute-free operations have ordinary
+C++ builders such as `add`, `multiply`, and `negate`; `operation(OpKind, operands)`
+provides access to the other attribute-free operators.
 
-Operator variables capture kind, complete attrs, and arity. Repeated occurrences
-must match that identity; their operands and result facts are checked separately.
-The matcher streams depth-first matches, uses discriminant indexes where
-possible, deduplicates bindings, checks cancellation inside recursion, and limits
-node visits and structural matches, including rejected matches.
+Attributes are typed literals or `attribute_var<T>` bindings. Dot dimensions
+are captured together as `DotDimensions`, which contains the contracting and
+batching lists for both operands. `dot_dims` constructs a literal. Repeated
+variables must match exactly; variables used in the RHS must be bound on the
+LHS. A name cannot be reused across tensor, operator, or attribute types.
 
-Every property is checked on every captured occurrence and on RHS operator
-occurrences. The complete RHS is inferred and its root type compared with the
-matched root before emission. It is revalidated before graph insertion. A bad
-parent cannot leave speculative child nodes in the graph. Rules are trusted
-algebraic equations supplied by the author: the parser validates their structure
-and applicability, not an arbitrary equation's mathematical truth.
-
-Value predicates inspect explicitly named tensor variables: `Scalar(?s)`
-requires a known rank-zero type; `Uniform(?v)` accepts a scalar, a known dense
-splat, or broadcasts of a proven uniform value. These checks share the rule's
-cancellation and visit budgets. `HomogeneousIn` checks the operator's law and
-numerical permissions; it no longer implicitly looks for a variable named
-`?scale`. Authors must express their value requirements in the equation/guards.
-
-The DSL helper `scale(?s, ?x)` represents multiplication by a rank-zero scalar:
-
-```text
-rule move-scaling-out-of-left-operand {
-  F(scale(?s, ?x), ?y) => scale(?s, F(?x, ?y))
-  where HomogeneousIn(F, 0) and Scalar(?s);
-}
+```cpp
+const auto x = tensor_var("x"), w = tensor_var("w");
+const auto p = attribute_var<mlir::ArrayAttr>("precision");
+auto project_first = rule(
+    "project-before-sequence-sum",
+    dot_general(reduce(x, ReduceKind::Sum, Axes{1}), w, dot_dims({1}, {0}), p),
+    reduce(dot_general(x, w, dot_dims({2}, {0}), p), ReduceKind::Sum, Axes{1}))
+    .when({rank(x, 3), rank(w, 2), sum_dot_interchange()});
 ```
 
-On the LHS, it matches a multiply and follows broadcast chains to bind the
-original rank-zero scalar. Matching the scalar as the right operand also checks
-multiply commutation permissions, since the RHS puts it first; strict floating
-evaluation therefore requires the scalar on the left. On the RHS, it prepares a
-`BroadcastInDim` with empty dimensions and the inferred tensor result type,
-then a `Multiply`; rank-zero tensors need no broadcast. Thus a scale broadcast
-to `2x3` before a transpose becomes a broadcast to `3x2` after it, and a scale
-on either input of a `2x3` by `3x4` dot becomes a broadcast to `2x4`. Scalar and
-tensor element types must agree. The helper adds no new TensorLang operation
-and requires no egg-c changes. The full constructed RHS is validated before
-any nodes are inserted.
+| Constructor | Typed attributes | Contract |
+| --- | --- | --- |
+| `dot_general(a, b, dims, precision)` | `DotDimensions`, `mlir::ArrayAttr` | Omitted precision matches absence; a variable captures the exact configuration including absence. Algorithms and nonempty extra attrs do not match. RHS result type is inferred. |
+| `reduce(x, kind, axes)` | `ReduceKind`, `Axes` | Only canonical identity initializers match. The RHS identity is constructed for the operand dtype. |
+| `transpose(x, permutation)` | `Axes` | Result type follows the operand and permutation. |
+| `broadcast_in_dim(x, attrs)` | `BroadcastAttrs` | Captures both dimensions and destination type. Copying attrs preserves that type; use a callback to construct a broadcast at another shape. |
 
-A tensor splat without rank-zero broadcast provenance does not match `scale`.
-Use `Uniform(?v)` in an ordinary multiply rule if its scale already has the
-correct RHS shape. Dynamic output construction is limited to what standalone
-broadcast inference can prove; homogeneity still requires the operator's
-existing shape and numerical guards.
+C++ checks constructor types and guard signatures. Constructors check operator
+arity. `compileRules` checks variable bindings, consistent attribute types and
+operator arities, unique rule names, guard subjects, and that each definition
+has exactly one RHS. It validates even definitions disabled by a rule group.
+Errors identify the rule name. The equations remain trusted: type and numerical
+checks do not prove the mathematical truth of a custom equation.
 
-`defaultSemanticRules()` returns the embedded `tensor.rules`; execution does not
-rely on the current directory. `--rules=path` replaces this default DSL rule set.
-Paths are caller-resolved. C++ attribute rules are always appended. Rule groups
-are `exact` (commutation/involution), `algebra` (also associativity), and `all`
-(also linearity/homogeneity); numerical guards apply in every group.
+### Computed attributes and custom replacements
+
+Use `rule(name, lhs).build(callback)` when replacement attributes depend on the
+match. A callback receives a read-only `Match` and an `RhsBuilder`. `match[x]`
+returns the tensor's e-class ID; `match.type(x)` returns its inferred type;
+`match[attr]` returns a typed attribute. Compute dimensions or permutations in
+ordinary C++, then return a checked expression. No additional language or
+attribute-function registry is needed.
+
+`match.constant(x)` returns the proven `mlir::ElementsAttr`, or a null attribute
+when no constant is known. Callbacks can use this to validate semantic constants
+such as the divisor in a mean; a tensor variable alone does not prove its value.
+
+For example, composing arbitrary valid permutations needs a small callback:
+
+```cpp
+const auto x = tensor_var("x");
+const auto p = attribute_var<Axes>("inner"), q = attribute_var<Axes>("outer");
+auto compose = rule("compose-transposes", transpose(transpose(x, p), q))
+    .build([=](const Match& match, RhsBuilder& rhs) {
+      auto inner = match[p], outer = match[q];
+      if (inner.size() != outer.size()) return rhs.reject("ranks differ");
+      Axes result;
+      for (auto axis : outer) result.push_back(inner.at(axis));
+      return rhs.transpose(rhs.ref(match[x]), std::move(result));
+    });
+```
+
+`RhsBuilder` provides checked `dot_general`, `reduce`, `transpose`,
+`broadcast_in_dim`, `add`, `divide`, `negate`, and a general
+`operation(OpKind, attrs, operands)` constructor.
+`apply(F, operands)` uses a captured operator's attrs and preserves its property
+checks at the new operand shapes. `reject(reason)` declines a structural match.
+Unbound or wrongly typed callback bindings become reported rejections. Other
+C++ exceptions propagate as programming errors. Keep captures owned by value;
+callbacks may run repeatedly, should be pure, and must keep any referenced MLIR
+context alive. The matcher can stop between callbacks; custom computation must
+be bounded to retain cooperative time limits.
+
+Builder operations prepare temporary expressions and never add nodes to the
+e-graph. The compiler validates the entire tree and root type before emitting
+an application, and rechecks it before insertion. Failed parents and explicit
+rejections leave no speculative child nodes. This same path handles declarative
+and callback replacements. Numerical guards apply to both.
+
+### Guards and default rules
+
+`rank(x, n)`, `scalar(x)`, and `uniform(x)` check known tensor facts. `uniform`
+accepts a scalar, a proven dense splat, or broadcasts of a proven uniform value.
+`commutative(F)`, `associative(F)`, `involution(F)`, `linear_in(F, i)`,
+`homogeneous_in(F, i)`, and `elementwise(F)` use the operator property contracts.
+Every captured occurrence and every rebuilt occurrence is checked separately.
+Repeated operator variables must agree on kind, attrs, and arity.
+
+`dot_reassociation()`, `sum_dot_interchange()`, and `dot_arithmetic()` are numerical applicability
+guards rather than generic properties. They inspect explicit matched operations
+and prepared replacements, without traversing opaque tensor-variable subgraphs.
+They require static types and real floating or modular integer arithmetic.
+Floating use requires dot-arithmetic, reassociation, distribution, finite-value,
+and signed-zero permissions. Only absent, empty, or paired typed StableHLO
+DEFAULT precision entries are admitted, and captured precision is retained.
+Nondefault precision, algorithms, complex arithmetic, and unknown dot metadata
+are rejected. Generic `associative(F)` never admits DotGeneral.
+
+`dot_division()` adds the dot-division permission and rejects integer division.
+The default `dot-divide-broadcast` rules support static matrix and batch-matrix
+products. Direct and two-stage broadcasts are matched explicitly, the denominator
+must be invariant along the contracting axis, and a singleton mapped onto that
+axis is dropped with a reshape. A checked callback builds the output broadcast
+at the dot result shape. The rule has one direction to limit search growth.
+
+`feature-gram-to-sample-gram` rewrites the squared Frobenius norm of a rank-2
+cross-product into the inner product of two sample Gram matrices. Explicit
+transposes and folded dot dimensions are supported. The matrices need a shared
+sample count, but their feature counts can differ. Real floating use requires
+`dot_arithmetic()` permissions; modular integers are admitted in strict mode.
+This rule covers the isolated norm, not Barlow's normalization or diagonal gather.
+
+`raw_moments()` guards two centered-square reduction patterns, with direct and
+JAX keepdims broadcasts:
+`sum((x - sum(x)/N)^2) -> sum(x*x) - sum(x)*sum(x)/N`.
+The callback checks canonical sum reductions, a static positive reduction size,
+a proven scalar floating constant equal to that size, and the complete mean
+broadcast mappings. Only real floating tensors are admitted. Integer division
+and arbitrary mean divisors are rejected. The original outer division by N,
+epsilon, rsqrt, affine parameters, and projection stay in the expression; their
+existing rules can subsequently compose with this one. No LayerNorm node or
+collective operator is added to the pattern language.
+
+`scale(s, x)` matches multiplication by a rank-zero scalar through broadcast
+chains. Matching the scalar on the right also requires multiply commutation
+permission. On the RHS it constructs a broadcast at the new tensor shape;
+rank-zero tensors need no broadcast. The scalar and tensor dtype must agree.
+A tensor splat without scalar broadcast provenance does not match this helper.
+
+`tensor_rules.cc` is the default rule source. `buildSemanticRules(policy, options)`
+compiles those definitions, and the driver appends the existing computed shape
+and dot rewrites from `buildAttributeRewrites()`. Text rule files, their parser,
+embedded rule generation, and `--rules` have been removed. Add or change rules
+in C++ and rebuild.
+
+The defaults retain the generic property rules and forward/reverse matrix,
+batched, batched/shared-weight, shared-weight, and kernel-attention dot chains.
+Compact signature tables construct dot-chain and sum/dot variants. Row, sequence,
+spatial, and weight sums plus kernel denominators have both directions. Direct
+LoRA rules and coordinated kernel numerator/denominator rules avoid requiring
+several intermediate rewrites to discover the full equation. See
+[WORKLOAD_REWRITES.md](WORKLOAD_REWRITES.md) for the workload checks and omitted
+cases. There is no general dimension-lineage solver; custom generalizations can
+use `.build()`.
+
+Rule groups are `exact` (commutation/involution), `algebra` (also associativity
+and dedicated dot reassociation), and `all` (also linearity/homogeneity and
+sum/dot interchange). Numerical guards remain active in every group. Matching
+streams depth-first, uses discriminant indexes where possible, deduplicates
+bindings, and shares cancellation, visit, and structural-match budgets.
 
 The default driver loads rules once before mutation. It allows 10 iterations,
 10,000 nodes, 4,096 structural matches per iteration, initial per-rule backoff at
@@ -261,7 +373,14 @@ proof facts separate from estimated candidate costs.
 
 ## Validation and third-party maintenance
 
-Tests cover DSL validation, source diagnostics, conjunctions, numerical policy,
+Tests cover typed attribute matching/construction, variable conflicts, computed
+callback replacements and rejection, exact precision preservation and rejection, every floating guard
+permission, invalid-RHS nonmutation, rule-group filtering and cancellation.
+An independent dense interpreter checks rectangular and batched matrix chains,
+sequence sum/projection and kernel denominators in both directions against
+modular integer and floating references. Pipeline tests verify selected RHS
+shapes and exported precision/reducer bodies. Tests also cover C++ binding validation,
+rule-name diagnostics, conjunctions, numerical policy,
 invalid-RHS nonmutation, search limits, dot factorization (including an independent
 modular integer numerical oracle), rectangular transpose/dot scalar scaling,
 explicit scalar/uniform guards and rejection without graph mutation,

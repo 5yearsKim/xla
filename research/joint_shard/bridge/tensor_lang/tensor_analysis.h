@@ -32,6 +32,12 @@ struct InferenceResult {
 // Does not touch the graph; suitable for validating an entire proposed RHS.
 InferenceResult inferTensorNode(const TensorNode& node,
                                 std::span<const TensorFacts> operands);
+// Derives a dot type without requiring an existing result_type. Construction
+// and validation share the same dimension/type contract.
+InferenceResult inferDotResultType(const DotGeneralAttrs& attrs,
+                                   std::span<const TensorFacts> operands);
+mlir::ElementsAttr canonicalReductionInitializer(ReduceKind kind,
+                                                 mlir::Type element_type);
 bool canonicalReductionIdentity(const ReduceAttrs& attrs,
                                 mlir::Type element_type);
 

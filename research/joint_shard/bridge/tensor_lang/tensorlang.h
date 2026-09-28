@@ -170,7 +170,7 @@ struct TensorNode {
   std::size_t hash() const;
   std::string format() const;
 };
-// One schema is shared by the DSL, importer, analysis, and exporter.
+// One schema is shared by patterns, importer, analysis, and exporter.
 struct OpSchema {
   OpKind op;
   std::string_view name;

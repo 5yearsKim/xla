@@ -167,3 +167,92 @@ exercise every workload through the CLI. Edge cases include large logits,
 large-offset LayerNorm inputs, constant Barlow features, and global MoE ties and
 both weight-normalization modes. These are four-device CPU correctness checks,
 not accelerator latency or collective-traffic benchmarks.
+
+
+The C++ engine integration tests additionally lower the originals, rewrite them,
+verify exported MLIR, and compile/execute the replacements. Build the tool from
+the XLA root first:
+
+```bash
+bazel build --config=joint_shard //research/joint_shard/tools:parse_stablehlo
+```
+
+Then, from this directory:
+
+```bash
+JOINT_SHARD_REWRITE_REPORT_DIR=/tmp/joint_shard_workload_validation \
+  uv run python -m unittest discover -s tests -p test_rewrite_saturation.py -v
+```
+
+The tests cover all layouts and both numerical policies, reversed dimension
+controls, and backward programs. They skip if the default binary is absent;
+`JOINT_SHARD_REWRITE_BINARY` selects another build. The optional report directory
+retains originals, replacements, rewrite diagnostics, and `summary.json`.
+Numerical execution removes placement annotations and uses full inputs on one
+CPU; the engine verifies the original four-device module. These checks establish
+correctness and rule availability, not communication savings or accelerator
+speedups. See [the workload report](../joint_shard/WORKLOAD_REWRITES.md) for
+selected transformations and bounded-search results. The engine supports moving
+row-wise division after the attention dot and the standalone feature-Gram norm
+identity. Tests verify shape tradeoffs, numerical permissions, and Gram gradients.
+Distributed CE/attention summaries, the full Barlow loss,
+hierarchical routing, and projection fusion remain omitted.
+
+## Four-arm experiment and aggressive LayerNorm
+
+The engine implements centered-square reductions to raw moments behind
+`--numerical-policy=relaxed --allow-raw-moments`. This permission is disabled in
+every engine preset. It accepts cancellation; the original Python LayerNorm
+continues to use centered variance.
+
+Build from the XLA root:
+
+```bash
+bazel build --config=joint_shard //research/joint_shard/tools:workload_ablation \
+  //research/joint_shard/tools:parse_stablehlo
+```
+
+Then run from this directory:
+
+```bash
+uv run python -m experiments.four_arm --output-dir=/tmp/joint_four_arm
+# Smaller regression shapes:
+uv run python -m experiments.four_arm --quick --output-dir=/tmp/joint_four_arm_quick
+```
+
+The suite covers reduce-dot, dense graph convolution, kernel linear attention,
+and LayerNorm: favorable/reversed dimensions and all three layouts for each.
+It retains baseline, rewrite-only, sharding-only, and combined arms with fixed
+external input/output contracts. Input adapters and output-contract collectives
+are included. Layout search enumerates bounded input assignments and lets Shardy
+propagate intermediate layouts. Profile candidates plus checked direct target
+rule applications keep communication-saving alternatives available even when
+they increase computation.
+
+The runner opts LayerNorm into raw moments and automatically repeats its six
+cases with the flag off. `--no-raw-moments` disables the opt-in;
+`--no-layernorm-controls` skips the repeat. It checks all selected arithmetic on
+CPU against independent NumPy references, checks rewritten original backward
+programs against JAX gradients, and includes a variance cancellation example.
+Cost parameters are configurable and illustrative. Outputs include selected
+collective IR, XLA inputs, numerical inputs/references, detailed JSON, and
+`REPORT.md`. See [the recorded report](../joint_shard/results/four_arm/REPORT.md).
+
+To measure the exact exported four-device programs, use the separate executor:
+
+```bash
+cd ../joint_shard_executor
+CUDA_VISIBLE_DEVICES=0,2,3,4 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  NVIDIA_TF32_OVERRIDE=0 XLA_FLAGS=--xla_gpu_enable_triton_gemm=false \
+  uv run --with 'jax[cuda12]==0.11.2' python benchmark_four_arm.py \
+  /tmp/joint_four_arm --platform=gpu --warmup=5 --repeats=30
+```
+
+This compiles the selected artifacts, validates distributed outputs, and records
+`accelerator.json`. Timing includes host dispatch and synchronized device
+completion; compilation and input/output transfers are excluded. It rotates arm
+order between rounds and records every sample. Use four available GPUs on your
+host; these example device IDs are specific to the recorded run.
+The recorded GPU run disables Triton GEMM and TF32 through the shown runtime
+settings to satisfy the same numerical tolerance as CPU. Default GPU matmul
+settings exceeded that tolerance on the original reduce-dot baseline.

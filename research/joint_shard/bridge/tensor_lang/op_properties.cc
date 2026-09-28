@@ -8,7 +8,7 @@ namespace joint_shard {
 
 NumericalPermissions numericalPermissions(NumericalPolicy policy) {
   if (policy == NumericalPolicy::AllowReassociation)
-    return {true, true, true, true, true, true};
+    return {true, true, true, true, true, true, true};
   return {};
 }
 

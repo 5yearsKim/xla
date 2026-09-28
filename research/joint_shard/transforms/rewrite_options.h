@@ -1,6 +1,5 @@
 #ifndef RESEARCH_JOINT_SHARD_TRANSFORMS_REWRITE_OPTIONS_H_
 #define RESEARCH_JOINT_SHARD_TRANSFORMS_REWRITE_OPTIONS_H_
-#include <string>
 
 #include "eggc/runner.hpp"
 #include "research/joint_shard/bridge/tensor_lang/tensor_rewrites.h"
@@ -9,7 +8,6 @@
 namespace joint_shard {
 
 struct TensorRewriteOptions {
-  std::string rules_file;     // Empty uses the embedded tensor.rules.
   bool print_egraph = false;  // Print post-rewrite e-classes to stderr.
   NumericalPolicy numerical_policy = NumericalPolicy::AllowReassociation;
   eggc::RunOptions runner = [] {

@@ -46,6 +46,7 @@ TEST_F(SelectedExportTest, PreservesSelectedCollectivesAndInput) {
               count(*selected, "sdy.all_gather"));
     EXPECT_EQ(count(*lowered->module, "sdy.manual_computation"), 0);
     EXPECT_EQ(count(*lowered->module, "sdy.mesh"), 0);
+    EXPECT_EQ(count(*lowered->module, "mhlo.copy"), 0);
     EXPECT_EQ(lowered->partitions, 4);
     EXPECT_EQ(lowered->module->getOperation()
                   ->getAttrOfType<mlir::IntegerAttr>("mhlo.num_partitions")
