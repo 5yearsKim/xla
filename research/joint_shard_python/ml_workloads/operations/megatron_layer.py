@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from .base import BaseOperation, BaseOperationInput
 
@@ -64,7 +65,9 @@ class MegatronLayer(BaseOperation[MegatronLayerInput, MegatronLayerConfig]):
         column = NamedSharding(self.mesh, P(None, "model"))
         row = NamedSharding(self.mesh, P("model", None))
 
-        def placed(key: jax.Array, shape: tuple[int, ...], sharding: NamedSharding) -> jax.Array:
+        def placed(
+            key: jax.Array, shape: tuple[int, ...], sharding: NamedSharding
+        ) -> jax.Array:
             return jax.device_put(jax.random.normal(key, shape), sharding)
 
         return MegatronLayerInput(
