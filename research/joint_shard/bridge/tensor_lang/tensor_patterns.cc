@@ -82,17 +82,7 @@ Pattern multiply(Pattern a, Pattern b) {
 Pattern divide(Pattern a, Pattern b) {
   return operation(OpKind::Divide, {a, b});
 }
-Pattern maximum(Pattern a, Pattern b) {
-  return operation(OpKind::Maximum, {a, b});
-}
-Pattern minimum(Pattern a, Pattern b) {
-  return operation(OpKind::Minimum, {a, b});
-}
 Pattern negate(Pattern x) { return operation(OpKind::Negate, {x}); }
-Pattern exp(Pattern x) { return operation(OpKind::Exp, {x}); }
-Pattern log(Pattern x) { return operation(OpKind::Log, {x}); }
-Pattern sqrt(Pattern x) { return operation(OpKind::Sqrt, {x}); }
-Pattern tanh(Pattern x) { return operation(OpKind::Tanh, {x}); }
 Pattern scale(Pattern scalar, Pattern tensor) {
   Term term;
   term.kind = TermKind::Scale;
@@ -261,9 +251,6 @@ Expression RhsBuilder::operation(OpKind op, OpAttrs attrs,
   expression.prepared_ =
       std::make_shared<const semantic_detail::Prepared>(std::move(result));
   return expression;
-}
-Expression RhsBuilder::add(Expression a, Expression b) const {
-  return operation(OpKind::Add, NoAttrs{}, {a, b});
 }
 Expression RhsBuilder::negate(Expression x) const {
   return operation(OpKind::Negate, NoAttrs{}, {x});

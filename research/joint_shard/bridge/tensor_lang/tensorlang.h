@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -40,47 +39,7 @@ enum class OpKind {
   Transpose,
 };
 
-inline const char* stableHloName(OpKind kind) {
-  switch (kind) {
-    case OpKind::Input:
-      return "input";
-    case OpKind::Constant:
-      return "stablehlo.constant";
-    case OpKind::Add:
-      return "stablehlo.add";
-    case OpKind::Subtract:
-      return "stablehlo.subtract";
-    case OpKind::Multiply:
-      return "stablehlo.multiply";
-    case OpKind::Divide:
-      return "stablehlo.divide";
-    case OpKind::Maximum:
-      return "stablehlo.maximum";
-    case OpKind::Minimum:
-      return "stablehlo.minimum";
-    case OpKind::Negate:
-      return "stablehlo.negate";
-    case OpKind::Exp:
-      return "stablehlo.exponential";
-    case OpKind::Log:
-      return "stablehlo.log";
-    case OpKind::Sqrt:
-      return "stablehlo.sqrt";
-    case OpKind::Tanh:
-      return "stablehlo.tanh";
-    case OpKind::DotGeneral:
-      return "stablehlo.dot_general";
-    case OpKind::Reduce:
-      return "stablehlo.reduce";
-    case OpKind::BroadcastInDim:
-      return "stablehlo.broadcast_in_dim";
-    case OpKind::Reshape:
-      return "stablehlo.reshape";
-    case OpKind::Transpose:
-      return "stablehlo.transpose";
-  }
-  throw std::invalid_argument("unknown TensorLang operator kind");
-}
+const char* stableHloName(OpKind kind);
 
 struct NoAttrs {
   bool operator==(const NoAttrs&) const noexcept { return true; }

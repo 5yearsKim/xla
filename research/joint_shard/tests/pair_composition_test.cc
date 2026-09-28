@@ -1,5 +1,4 @@
 #include <map>
-#include <set>
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/Verifier.h"

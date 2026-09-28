@@ -1,6 +1,5 @@
 #include "research/joint_shard/tests/support/fixture_interpreter.h"
 
-#include <cmath>
 #include <map>
 #include <set>
 #include <stdexcept>

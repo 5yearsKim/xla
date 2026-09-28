@@ -96,13 +96,7 @@ Pattern add(Pattern a, Pattern b);
 Pattern subtract(Pattern a, Pattern b);
 Pattern multiply(Pattern a, Pattern b);
 Pattern divide(Pattern a, Pattern b);
-Pattern maximum(Pattern a, Pattern b);
-Pattern minimum(Pattern a, Pattern b);
 Pattern negate(Pattern x);
-Pattern exp(Pattern x);
-Pattern log(Pattern x);
-Pattern sqrt(Pattern x);
-Pattern tanh(Pattern x);
 Pattern scale(Pattern scalar, Pattern tensor);
 Pattern dot_general(Pattern a, Pattern b, Attribute<DotDimensions> dimensions,
                     Attribute<mlir::ArrayAttr> precision = {});
@@ -177,7 +171,6 @@ class RhsBuilder {
   Expression reject(std::string reason) const;
   Expression operation(OpKind op, OpAttrs attrs,
                        std::vector<Expression> operands) const;
-  Expression add(Expression a, Expression b) const;
   Expression negate(Expression x) const;
   Expression divide(Expression a, Expression b) const;
   Expression dot_general(Expression a, Expression b, DotDimensions dimensions,

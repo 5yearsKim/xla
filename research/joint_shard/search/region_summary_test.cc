@@ -1,8 +1,5 @@
 #include "research/joint_shard/search/region_summary.h"
 
-#include <limits>
-#include <set>
-
 #include "research/joint_shard/tests/support/region_test.h"
 
 namespace joint_shard {

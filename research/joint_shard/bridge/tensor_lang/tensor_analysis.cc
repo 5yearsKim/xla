@@ -1,7 +1,6 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 
 #include "llvm/ADT/APFloat.h"

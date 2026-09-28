@@ -40,10 +40,12 @@ joint_shard::TensorNode node{joint_shard::OpKind::Transpose,
 and arity while ignoring operand IDs. MLIR handles in attrs are immutable and
 context-owned; retain the context throughout graph use and export.
 
-`opSchemas` / `opSchema` / `lookupOpSchema` provide names, arities, and whether
+`opSchemas` / `opSchema` / `lookupOpSchema` provide canonical StableHLO names, arities, and whether
 a concrete pattern operator can use `NoAttrs`. Add new operations here and implement attribute
 validation, inference, importer, and exporter together. Property-indexed semantic
 search iterates registered schemas rather than relying on enum ordering.
+`stableHloName` uses that same table. Short text-DSL operator-name aliases are
+no longer accepted; concrete patterns use `OpKind`.
 
 `inferTensorNode(node, operandFacts)` returns **Valid**, **Unknown**, or
 **Invalid**, with an explanation. It does not access or mutate an e-graph.
@@ -60,7 +62,7 @@ original region's ordered boundary-value vector.
 
 `declaredProperties` defines candidate properties directly inside the OpKind
 switch. `queryProperty` checks attrs, facts, shape, and numerical permissions and
-returns `PropertyDecision{allowed, reason}`. `hasProperty` is its boolean wrapper.
+returns `PropertyDecision{allowed, reason}`.
 
 | Operator | Candidate properties |
 | --- | --- |
@@ -190,7 +192,7 @@ auto compose = rule("compose-transposes", transpose(transpose(x, p), q))
 ```
 
 `RhsBuilder` provides checked `dot_general`, `reduce`, `transpose`,
-`broadcast_in_dim`, `add`, `divide`, `negate`, and a general
+`broadcast_in_dim`, `divide`, `negate`, and a general
 `operation(OpKind, attrs, operands)` constructor.
 `apply(F, operands)` uses a captured operator's attrs and preserves its property
 checks at the new operand shapes. `reject(reason)` declines a structural match.

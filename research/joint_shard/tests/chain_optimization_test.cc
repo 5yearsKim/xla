@@ -4,7 +4,6 @@
 #include <limits>
 #include <map>
 #include <random>
-#include <set>
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"

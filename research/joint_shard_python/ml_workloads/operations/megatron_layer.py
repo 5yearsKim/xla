@@ -104,9 +104,3 @@ class MegatronLayer(BaseOperation[MegatronLayerInput, MegatronLayerConfig]):
 
         h = jax.nn.gelu(x @ w1)
         return x + h @ w2
-
-    def execute(self, inputs: MegatronLayerInput) -> jax.Array:
-        """Compile and execute the layer with replicated output."""
-        return jax.jit(self._operation, out_shardings=self.output_sharding)(
-            *inputs.arrays()
-        )

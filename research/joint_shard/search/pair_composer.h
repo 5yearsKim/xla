@@ -1,7 +1,6 @@
 #ifndef RESEARCH_JOINT_SHARD_SEARCH_PAIR_COMPOSER_H_
 #define RESEARCH_JOINT_SHARD_SEARCH_PAIR_COMPOSER_H_
 #include <cstddef>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>

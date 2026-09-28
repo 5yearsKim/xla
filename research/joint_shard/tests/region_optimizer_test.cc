@@ -1,8 +1,5 @@
 #include "research/joint_shard/search/region_optimizer.h"
 
-#include <limits>
-#include <set>
-
 #include "research/joint_shard/reporting/reports.h"
 #include "research/joint_shard/sharding/shardy_runner.h"
 #include "research/joint_shard/tests/support/region_test.h"

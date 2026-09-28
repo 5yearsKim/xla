@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <limits>
 #include <stdexcept>
 
 #include "llvm/Support/JSON.h"

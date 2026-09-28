@@ -3,7 +3,6 @@
 
 #include <map>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "mlir/IR/BuiltinOps.h"

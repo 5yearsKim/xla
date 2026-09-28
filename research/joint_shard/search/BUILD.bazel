@@ -33,9 +33,7 @@ cc_library(
         ":region_summary",
         ":resolved_plan",
         ":execution_plan",
-        "//research/joint_shard/sharding:plan_materializer",
         "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:IR",
     ],
 )
 

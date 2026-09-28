@@ -9,5 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-lowered/*
-!lowered/.gitkeep
+lowered/
+.ruff_cache/

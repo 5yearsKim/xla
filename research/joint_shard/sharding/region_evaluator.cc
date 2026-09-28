@@ -6,7 +6,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
 #include "research/joint_shard/bridge/stablehlo_exporter.h"
-#include "research/joint_shard/transforms/region_candidates.h"
+#include "research/joint_shard/transforms/candidate.h"
+#include "research/joint_shard/transforms/regionizer.h"
 #include "shardy/dialect/sdy/ir/utils.h"
 
 namespace joint_shard {

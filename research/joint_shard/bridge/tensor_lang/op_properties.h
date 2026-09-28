@@ -72,8 +72,6 @@ std::span<const OpProperty> declaredProperties(OpKind op);
 PropertyDecision queryProperty(const TensorNode& node,
                                const OpProperty& property,
                                const PropertyContext& context);
-bool hasProperty(const TensorNode& node, const OpProperty& property,
-                 const PropertyContext& context);
 
 }  // namespace joint_shard
 

@@ -41,16 +41,6 @@ if "JOINT_SHARD_REWRITE_BINARY" in os.environ and not BINARY.is_file():
     raise RuntimeError(f"Rewrite binary does not exist: {BINARY}")
 
 
-def execute_mlir(text: str, arrays: tuple[jax.Array, ...]) -> list[jax.Array]:
-    """Check values with full inputs on one CPU; this is not a sharding benchmark.
-
-    The engine verifies the module with the original mesh/annotations. For this
-    numerical oracle only, remove argument placement annotations and the mesh.
-    No computation or arithmetic operation is substituted.
-    """
-    return execute_unsharded(text, arrays)
-
-
 def dot_shapes(text: str) -> list[tuple[int, ...]]:
     with mlir.make_ir_context():
         module = ir.Module.parse(text)
@@ -164,7 +154,7 @@ class RewriteSaturationTest(unittest.TestCase):
         layout = getattr(config, "layout", "tensor_parallel")
         label = f"{name}.{variant}.{layout}.{policy}"
         result, runs, applied = self.rewrite_text(label, original, policy)
-        actual = execute_mlir(result.stdout, arrays)
+        actual = execute_unsharded(result.stdout, arrays)
         expected_leaves = jax.tree.leaves(expected)
         self.assertEqual(len(actual), len(expected_leaves), msg=label)
         for value, expected_value in zip(actual, expected_leaves, strict=True):
@@ -311,7 +301,7 @@ class RewriteSaturationTest(unittest.TestCase):
                     label = f"gram_norm.{samples}.{features_a}.{features_b}.{gradient}.{policy}"
                     result, runs, applied = self.rewrite_text(label, original, policy)
                     for actual, reference_value in zip(
-                        execute_mlir(result.stdout, (a, b)),
+                        execute_unsharded(result.stdout, (a, b)),
                         jax.tree.leaves(expected),
                         strict=True,
                     ):
@@ -367,7 +357,7 @@ class RewriteSaturationTest(unittest.TestCase):
                     (f"--allow-dot-division={str(enabled).lower()}",),
                 )
                 np.testing.assert_allclose(
-                    execute_mlir(result.stdout, arrays)[0],
+                    execute_unsharded(result.stdout, arrays)[0],
                     expected,
                     rtol=3e-5,
                     atol=3e-5,

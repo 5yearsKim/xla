@@ -1,5 +1,6 @@
 #include "research/joint_shard/bridge/tensor_lang/tensorlang.h"
 
+#include <stdexcept>
 #include <type_traits>
 
 #include "llvm/Support/raw_ostream.h"
@@ -126,23 +127,23 @@ std::size_t TensorNode::hash() const {
 namespace {
 constexpr OpSchema schemas[] = {
     {OpKind::Input, "input", 0, false},
-    {OpKind::Constant, "constant", 0, false},
-    {OpKind::Add, "add", 2, true},
-    {OpKind::Subtract, "subtract", 2, true},
-    {OpKind::Multiply, "multiply", 2, true},
-    {OpKind::Divide, "divide", 2, true},
-    {OpKind::Maximum, "maximum", 2, true},
-    {OpKind::Minimum, "minimum", 2, true},
-    {OpKind::Negate, "negate", 1, true},
-    {OpKind::Exp, "exp", 1, true},
-    {OpKind::Log, "log", 1, true},
-    {OpKind::Sqrt, "sqrt", 1, true},
-    {OpKind::Tanh, "tanh", 1, true},
-    {OpKind::DotGeneral, "dot_general", 2, false},
-    {OpKind::Reduce, "reduce", 1, false},
-    {OpKind::Transpose, "transpose", 1, false},
-    {OpKind::Reshape, "reshape", 1, false},
-    {OpKind::BroadcastInDim, "broadcast_in_dim", 1, false},
+    {OpKind::Constant, "stablehlo.constant", 0, false},
+    {OpKind::Add, "stablehlo.add", 2, true},
+    {OpKind::Subtract, "stablehlo.subtract", 2, true},
+    {OpKind::Multiply, "stablehlo.multiply", 2, true},
+    {OpKind::Divide, "stablehlo.divide", 2, true},
+    {OpKind::Maximum, "stablehlo.maximum", 2, true},
+    {OpKind::Minimum, "stablehlo.minimum", 2, true},
+    {OpKind::Negate, "stablehlo.negate", 1, true},
+    {OpKind::Exp, "stablehlo.exponential", 1, true},
+    {OpKind::Log, "stablehlo.log", 1, true},
+    {OpKind::Sqrt, "stablehlo.sqrt", 1, true},
+    {OpKind::Tanh, "stablehlo.tanh", 1, true},
+    {OpKind::DotGeneral, "stablehlo.dot_general", 2, false},
+    {OpKind::Reduce, "stablehlo.reduce", 1, false},
+    {OpKind::Transpose, "stablehlo.transpose", 1, false},
+    {OpKind::Reshape, "stablehlo.reshape", 1, false},
+    {OpKind::BroadcastInDim, "stablehlo.broadcast_in_dim", 1, false},
 };
 }
 std::span<const OpSchema> opSchemas() { return schemas; }
@@ -151,9 +152,13 @@ const OpSchema* opSchema(OpKind op) {
     if (schema.op == op) return &schema;
   return nullptr;
 }
+const char* stableHloName(OpKind op) {
+  if (const auto* schema = opSchema(op)) return schema->name.data();
+  throw std::invalid_argument("unknown TensorLang operator kind");
+}
 const OpSchema* lookupOpSchema(std::string_view name) {
   for (const auto& schema : schemas)
-    if (schema.name == name || stableHloName(schema.op) == name) return &schema;
+    if (schema.name == name) return &schema;
   return nullptr;
 }
 bool validNodeSchema(const TensorNode& node) {
