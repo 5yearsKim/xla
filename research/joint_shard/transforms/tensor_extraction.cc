@@ -25,7 +25,7 @@ size_t localCost(const TensorNode& node, std::span<const TensorFacts> operands,
     if (profile == ExtractionProfile::Compute) {
       if (node.op == OpKind::DotGeneral) {
         const auto& attrs = std::get<DotGeneralAttrs>(node.attrs);
-        for (auto axis : attrs.lhs_contracting) {
+        for (auto axis : attrs.dimensions.lhs_contracting) {
           auto size = operands[0].type.getDimSize(axis);
           local = saturatedMultiply(local,
                                     size < 0 ? 32 : std::max<int64_t>(1, size));

@@ -32,6 +32,10 @@ struct InferenceResult {
 // Does not touch the graph; suitable for validating an entire proposed RHS.
 InferenceResult inferTensorNode(const TensorNode& node,
                                 std::span<const TensorFacts> operands);
+// Complete omitted derived fields, then validate the entire operation. Shared
+// by declarative RHS patterns and callback builders; never mutates the graph.
+InferenceResult completeTensorNode(TensorNode& node,
+                                   std::span<const TensorFacts> operands);
 // Derives a dot type without requiring an existing result_type. Construction
 // and validation share the same dimension/type contract.
 InferenceResult inferDotResultType(const DotGeneralAttrs& attrs,

@@ -98,19 +98,24 @@ InferenceResult inferDotResultType(const DotGeneralAttrs& attrs,
   if (!numeric(element) || rhs.getElementType() != element ||
       lhs.getEncoding() || rhs.getEncoding())
     return invalid("unsupported dot element types or encodings");
-  if (attrs.lhs_contracting.size() != attrs.rhs_contracting.size() ||
-      attrs.lhs_batching.size() != attrs.rhs_batching.size())
+  if (attrs.dimensions.lhs_contracting.size() !=
+          attrs.dimensions.rhs_contracting.size() ||
+      attrs.dimensions.lhs_batching.size() !=
+          attrs.dimensions.rhs_batching.size())
     return invalid("dot dimension list lengths differ");
-  auto l = attrs.lhs_batching, r = attrs.rhs_batching;
-  l.insert(l.end(), attrs.lhs_contracting.begin(), attrs.lhs_contracting.end());
-  r.insert(r.end(), attrs.rhs_contracting.begin(), attrs.rhs_contracting.end());
+  auto l = attrs.dimensions.lhs_batching, r = attrs.dimensions.rhs_batching;
+  l.insert(l.end(), attrs.dimensions.lhs_contracting.begin(),
+           attrs.dimensions.lhs_contracting.end());
+  r.insert(r.end(), attrs.dimensions.rhs_contracting.begin(),
+           attrs.dimensions.rhs_contracting.end());
   if (!axesValid(l, lhs.getRank()) || !axesValid(r, rhs.getRank()))
     return invalid("dot axes overlap or are out of range");
   for (unsigned i = 0; i < l.size(); ++i)
     if (!compatible(lhs.getDimSize(l[i]), rhs.getDimSize(r[i])))
       return invalid("dot paired dimensions differ");
   std::vector<int64_t> shape;
-  for (auto axis : attrs.lhs_batching) shape.push_back(lhs.getDimSize(axis));
+  for (auto axis : attrs.dimensions.lhs_batching)
+    shape.push_back(lhs.getDimSize(axis));
   for (int64_t axis = 0; axis < lhs.getRank(); ++axis)
     if (std::find(l.begin(), l.end(), axis) == l.end())
       shape.push_back(lhs.getDimSize(axis));
@@ -154,6 +159,28 @@ mlir::ElementsAttr canonicalReductionInitializer(ReduceKind kind,
     return mlir::DenseElementsAttr::get(scalar, value);
   }
   return {};
+}
+
+InferenceResult completeTensorNode(TensorNode& node,
+                                   std::span<const TensorFacts> operands) {
+  if (!validNodeSchema(node) || operands.size() != node.operands.size())
+    return invalid("operator attributes or arity do not match its schema");
+  if (auto* attrs = std::get_if<DotGeneralAttrs>(&node.attrs)) {
+    if (!attrs->result_type) {
+      auto result = inferDotResultType(*attrs, operands);
+      if (!result.valid()) return result;
+      attrs->result_type = result.facts.type;
+    }
+  }
+  if (auto* attrs = std::get_if<ReduceAttrs>(&node.attrs)) {
+    if (!attrs->initializer) {
+      if (!operands[0].type)
+        return invalid("reduce requires a known operand type");
+      attrs->initializer = canonicalReductionInitializer(
+          attrs->kind, operands[0].type.getElementType());
+    }
+  }
+  return inferTensorNode(node, operands);
 }
 
 InferenceResult inferTensorNode(const TensorNode& node,

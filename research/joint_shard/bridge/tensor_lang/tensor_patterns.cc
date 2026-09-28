@@ -1,6 +1,5 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_patterns.h"
 
-#include <array>
 #include <stdexcept>
 #include <type_traits>
 
@@ -8,46 +7,32 @@
 
 namespace joint_shard::patterns {
 namespace {
-using semantic_detail::AttributeField;
-using semantic_detail::AttributePattern;
-using semantic_detail::AttributeValue;
 using semantic_detail::PatternAccess;
 using semantic_detail::PredicateKind;
 using semantic_detail::Term;
 using semantic_detail::TermKind;
-
-template <class T>
-AttributePattern field(AttributeField kind, const Attribute<T>& value) {
-  AttributePattern result{kind, AttributeValue{}};
-  std::visit(
-      [&](const auto& v) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(v)>, T>)
-          result.expression = AttributeValue(v);
-        else
-          result.expression = v.name;
-      },
-      value.value());
-  return result;
-}
-Pattern concrete(OpKind op, std::vector<Pattern> operands,
-                 std::vector<AttributePattern> attributes = {}) {
-  auto* schema = opSchema(op);
-  if (!schema || operands.size() != schema->arity)
-    throw std::invalid_argument(
-        "concrete pattern has invalid operator or arity");
-  Term term;
-  term.kind = TermKind::ConcreteOperator;
-  term.op = op;
-  term.attributes = std::move(attributes);
-  for (const auto& operand : operands)
-    term.children.push_back(PatternAccess::term(operand));
-  return PatternAccess::pattern(std::move(term));
-}
 Guard valueGuard(PredicateKind kind, TensorVar tensor,
                  std::optional<unsigned> index = {}) {
   return PatternAccess::guard({kind, std::move(tensor.name), index});
 }
 }  // namespace
+
+Pattern detail::concrete(OpKind op, OpAttrs attrs,
+                         std::vector<Pattern> operands,
+                         std::vector<AttributeConstraint> attributes) {
+  Term term;
+  term.kind = TermKind::ConcreteOperator;
+  term.op = op;
+  term.initial_attributes = std::move(attrs);
+  for (const auto& constraint : attributes)
+    if (std::holds_alternative<Missing>(constraint.expression))
+      throw std::invalid_argument("missing pattern attribute: " +
+                                  std::string(constraint.field));
+  term.attributes = std::move(attributes);
+  for (const auto& operand : operands)
+    term.children.push_back(PatternAccess::term(operand));
+  return PatternAccess::pattern(std::move(term));
+}
 
 TensorVar::operator Pattern() const {
   Term term;
@@ -65,48 +50,11 @@ Pattern OperatorVar::call(std::vector<Pattern> operands) const {
     term.children.push_back(PatternAccess::term(operand));
   return PatternAccess::pattern(std::move(term));
 }
-Pattern operation(OpKind op, std::vector<Pattern> operands) {
-  auto* schema = opSchema(op);
-  if (!schema || !schema->attribute_free)
-    throw std::invalid_argument(
-        "use a typed constructor for attribute-bearing patterns");
-  return concrete(op, std::move(operands));
-}
-Pattern add(Pattern a, Pattern b) { return operation(OpKind::Add, {a, b}); }
-Pattern subtract(Pattern a, Pattern b) {
-  return operation(OpKind::Subtract, {a, b});
-}
-Pattern multiply(Pattern a, Pattern b) {
-  return operation(OpKind::Multiply, {a, b});
-}
-Pattern divide(Pattern a, Pattern b) {
-  return operation(OpKind::Divide, {a, b});
-}
-Pattern negate(Pattern x) { return operation(OpKind::Negate, {x}); }
 Pattern scale(Pattern scalar, Pattern tensor) {
   Term term;
   term.kind = TermKind::Scale;
   term.children = {PatternAccess::term(scalar), PatternAccess::term(tensor)};
   return PatternAccess::pattern(std::move(term));
-}
-Pattern dot_general(Pattern a, Pattern b, Attribute<DotDimensions> dimensions,
-                    Attribute<mlir::ArrayAttr> precision) {
-  return concrete(OpKind::DotGeneral, {a, b},
-                  {field(AttributeField::DotDimensions, dimensions),
-                   field(AttributeField::PrecisionConfig, precision)});
-}
-Pattern reduce(Pattern x, Attribute<ReduceKind> kind, Attribute<Axes> axes) {
-  return concrete(OpKind::Reduce, {x},
-                  {field(AttributeField::ReduceKind, kind),
-                   field(AttributeField::Axes, axes)});
-}
-Pattern transpose(Pattern x, Attribute<Axes> permutation) {
-  return concrete(OpKind::Transpose, {x},
-                  {field(AttributeField::Permutation, permutation)});
-}
-Pattern broadcast_in_dim(Pattern x, Attribute<BroadcastAttrs> attrs) {
-  return concrete(OpKind::BroadcastInDim, {x},
-                  {field(AttributeField::Broadcast, attrs)});
 }
 Guard property(OperatorVar op, OpProperty property) {
   PredicateKind kind = std::visit(
@@ -244,54 +192,13 @@ Expression RhsBuilder::operation(OpKind op, OpAttrs attrs,
   }
   result.node = {op, std::move(attrs),
                  std::vector<eggc::Id>(operands.size(), 0)};
-  auto inference = inferTensorNode(result.node, facts);
+  auto inference = completeTensorNode(result.node, facts);
   if (!inference.valid()) return reject("RHS: " + inference.reason);
   result.facts = inference.facts;
   Expression expression;
   expression.prepared_ =
       std::make_shared<const semantic_detail::Prepared>(std::move(result));
   return expression;
-}
-Expression RhsBuilder::negate(Expression x) const {
-  return operation(OpKind::Negate, NoAttrs{}, {x});
-}
-Expression RhsBuilder::divide(Expression a, Expression b) const {
-  return operation(OpKind::Divide, NoAttrs{}, {a, b});
-}
-Expression RhsBuilder::dot_general(Expression a, Expression b,
-                                   DotDimensions dims,
-                                   mlir::ArrayAttr precision) const {
-  if (!a.prepared_) return a;
-  if (!b.prepared_) return b;
-  DotGeneralAttrs attrs{dims.lhs_contracting,
-                        dims.rhs_contracting,
-                        dims.lhs_batching,
-                        dims.rhs_batching,
-                        precision,
-                        {},
-                        {},
-                        {}};
-  std::array<TensorFacts, 2> operands{a.prepared_->facts, b.prepared_->facts};
-  auto inferred = inferDotResultType(attrs, operands);
-  if (!inferred.valid()) return reject("RHS dot_general: " + inferred.reason);
-  attrs.result_type = inferred.facts.type;
-  return operation(OpKind::DotGeneral, std::move(attrs), {a, b});
-}
-Expression RhsBuilder::reduce(Expression x, ReduceKind kind, Axes axes) const {
-  if (!x.prepared_) return x;
-  auto type = x.prepared_->facts.type;
-  if (!type) return reject("RHS reduce requires a known type");
-  auto initializer = canonicalReductionInitializer(kind, type.getElementType());
-  return operation(OpKind::Reduce,
-                   ReduceAttrs{kind, std::move(axes), initializer}, {x});
-}
-Expression RhsBuilder::transpose(Expression x, Axes permutation) const {
-  return operation(OpKind::Transpose, TransposeAttrs{std::move(permutation)},
-                   {x});
-}
-Expression RhsBuilder::broadcast_in_dim(Expression x,
-                                        BroadcastAttrs attrs) const {
-  return operation(OpKind::BroadcastInDim, std::move(attrs), {x});
 }
 Expression RhsBuilder::apply(const OperatorVar& op,
                              std::vector<Expression> operands) const {

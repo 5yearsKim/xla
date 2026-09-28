@@ -26,6 +26,8 @@ cc_library(
         "tensor_patterns.h",
         "tensor_rewrites.h",
         "tensorlang.h",
+        "tensorlang.def",
+        "tensor_attributes.h",
     ],
     deps = [
         "//research/joint_shard/egg-c:eggc",

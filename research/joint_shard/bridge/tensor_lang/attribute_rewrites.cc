@@ -104,10 +104,11 @@ std::vector<TensorRewrite> buildAttributeRewrites() {
                     if (transpose.op != OpKind::Transpose) continue;
                     auto candidate = dot;
                     auto& attrs = std::get<DotGeneralAttrs>(candidate.attrs);
-                    auto& contract = side == 0 ? attrs.lhs_contracting
-                                               : attrs.rhs_contracting;
-                    auto& batch =
-                        side == 0 ? attrs.lhs_batching : attrs.rhs_batching;
+                    auto& contract = side == 0
+                                         ? attrs.dimensions.lhs_contracting
+                                         : attrs.dimensions.rhs_contracting;
+                    auto& batch = side == 0 ? attrs.dimensions.lhs_batching
+                                            : attrs.dimensions.rhs_batching;
                     const auto& permutation =
                         std::get<TransposeAttrs>(transpose.attrs).permutation;
                     // Free axes must retain output order. Otherwise an output

@@ -123,23 +123,21 @@ std::optional<TensorNode> importNode(mlir::Operation* op) {
     const auto dims = dot.getDotDimensionNumbers();
     return TensorNode{
         OpKind::DotGeneral,
-        DotGeneralAttrs{{dims.getLhsContractingDimensions().begin(),
-                         dims.getLhsContractingDimensions().end()},
-                        {dims.getRhsContractingDimensions().begin(),
-                         dims.getRhsContractingDimensions().end()},
-                        {dims.getLhsBatchingDimensions().begin(),
-                         dims.getLhsBatchingDimensions().end()},
-                        {dims.getRhsBatchingDimensions().begin(),
-                         dims.getRhsBatchingDimensions().end()},
-                        op->getAttrOfType<mlir::ArrayAttr>("precision_config"),
-                        op->getAttr("algorithm"),
-                        result,
-                        mlir::DictionaryAttr::get(op->getContext())},
+        DotGeneralAttrs{
+            DotDimensions{{dims.getLhsContractingDimensions().begin(),
+                           dims.getLhsContractingDimensions().end()},
+                          {dims.getRhsContractingDimensions().begin(),
+                           dims.getRhsContractingDimensions().end()},
+                          {dims.getLhsBatchingDimensions().begin(),
+                           dims.getLhsBatchingDimensions().end()},
+                          {dims.getRhsBatchingDimensions().begin(),
+                           dims.getRhsBatchingDimensions().end()}},
+            op->getAttrOfType<mlir::ArrayAttr>("precision_config"),
+            op->getAttr("algorithm"), result,
+            mlir::DictionaryAttr::get(op->getContext())},
         {0, 0}};
   }
   const OpSchema* schema = lookupOpSchema(name.str());
-  // StableHLO calls this exponential; TensorLang uses exp.
-  if (name == "stablehlo.exponential") schema = opSchema(OpKind::Exp);
   if (!schema || !schema->attribute_free || !knownAttributes(op, {})) return {};
   return TensorNode{schema->op, NoAttrs{},
                     std::vector<eggc::Id>(schema->arity, 0)};

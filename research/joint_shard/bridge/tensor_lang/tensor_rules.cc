@@ -6,6 +6,7 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_patterns.h"
 
 namespace joint_shard {
+using patterns::attributes;
 namespace {
 // Limited to ordinary matrix and batch-matrix products. Their surviving lhs
 // axes retain their positions in the result, so no general dimension solver
@@ -13,10 +14,11 @@ namespace {
 patterns::Expression divideAfterDot(
     const patterns::Match& m, patterns::RhsBuilder& rhs, patterns::TensorVar x,
     patterns::TensorVar v, patterns::TensorVar denominator,
-    patterns::AttributeVar<patterns::DotDimensions> dimensions,
+    patterns::AttributeVar<DotDimensions> dimensions,
     patterns::AttributeVar<mlir::ArrayAttr> precision,
-    patterns::Axes broadcast_dimensions) {
+    Axes broadcast_dimensions) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   auto xt = m.type(x), vt = m.type(v), dt = m.type(denominator);
   if (!xt || !vt || !dt || !xt.hasStaticShape() || !vt.hasStaticShape() ||
       !dt.hasStaticShape())
@@ -44,27 +46,31 @@ patterns::Expression divideAfterDot(
   }
   auto d = rhs.ref(m[denominator]);
   if (kept_shape.size() != static_cast<size_t>(dt.getRank()))
-    d = rhs.operation(OpKind::Reshape,
-                      ReshapeAttrs{mlir::RankedTensorType::get(
-                          kept_shape, dt.getElementType())},
-                      {d});
+    d = rhs.make(reshape,
+                 ReshapeAttrs{mlir::RankedTensorType::get(kept_shape,
+                                                          dt.getElementType())},
+                 d);
   Axes result_shape(xt.getShape().begin(), xt.getShape().end());
   result_shape.back() = vt.getDimSize(vt.getRank() - 1);
   auto result_type =
       mlir::RankedTensorType::get(result_shape, xt.getElementType());
-  return rhs.divide(
-      rhs.dot_general(rhs.ref(m[x]), rhs.ref(m[v]), dims, m[precision]),
-      rhs.broadcast_in_dim(d, {output_dimensions, result_type}));
+  return rhs.make(divide,
+                  rhs.make(dot_general, DotGeneralAttrs{dims, m[precision]},
+                           rhs.ref(m[x]), rhs.ref(m[v])),
+                  rhs.make(broadcast_in_dim,
+                           BroadcastAttrs{output_dimensions, result_type}, d));
 }
 }  // namespace
 
 std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
                                               SemanticRuleOptions options) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x"), y = tensor_var("y"), z = tensor_var("z"),
              a = tensor_var("a"), b = tensor_var("b"), c = tensor_var("c"),
              s = tensor_var("s"), w = tensor_var("w"), q = tensor_var("q"),
              k = tensor_var("k");
+  // The number is the operand count (arity): F(x, y) is binary; U(x) is unary.
   const auto F = operator_var("F", 2), U = operator_var("F", 1);
   std::vector<RuleDefinition> rules{
       rule("commute-binary-operator", F(x, y), F(y, x)).when(commutative(F)),
@@ -128,12 +134,16 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
   };
   const auto precision = attribute_var<mlir::ArrayAttr>("precision");
   for (const auto& signature : cases) {
-    const auto left =
-        dot_general(dot_general(a, b, signature.left_inner, precision), c,
-                    signature.left_outer, precision);
-    const auto right =
-        dot_general(a, dot_general(b, c, signature.right_inner, precision),
-                    signature.right_outer, precision);
+    const auto left = dot_general(
+        dot_general(
+            a, b, attributes<DotGeneralAttrs>{signature.left_inner, precision}),
+        c, attributes<DotGeneralAttrs>{signature.left_outer, precision});
+    const auto right = dot_general(
+        a,
+        dot_general(
+            b, c,
+            attributes<DotGeneralAttrs>{signature.right_inner, precision}),
+        attributes<DotGeneralAttrs>{signature.right_outer, precision});
     const auto guards = {rank(a, signature.ranks[0]),
                          rank(b, signature.ranks[1]),
                          rank(c, signature.ranks[2]), dot_reassociation()};
@@ -218,15 +228,26 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
              dot_dims({1}, {1})},
   };
   for (const auto& signature : sums) {
-    const auto reduced = reduce(x, ReduceKind::Sum, signature.input_axes);
+    const auto reduced = reduce(
+        x, attributes<ReduceAttrs>{ReduceKind::Sum, signature.input_axes});
     const auto sum_first =
         signature.reduce_right
-            ? dot_general(w, reduced, signature.reduced_dot, precision)
-            : dot_general(reduced, w, signature.reduced_dot, precision);
-    const auto full = signature.reduce_right
-                          ? dot_general(w, x, signature.full_dot, precision)
-                          : dot_general(x, w, signature.full_dot, precision);
-    const auto dot_first = reduce(full, ReduceKind::Sum, signature.output_axes);
+            ? dot_general(
+                  w, reduced,
+                  attributes<DotGeneralAttrs>{signature.reduced_dot, precision})
+            : dot_general(reduced, w,
+                          attributes<DotGeneralAttrs>{signature.reduced_dot,
+                                                      precision});
+    const auto full =
+        signature.reduce_right
+            ? dot_general(
+                  w, x,
+                  attributes<DotGeneralAttrs>{signature.full_dot, precision})
+            : dot_general(
+                  x, w,
+                  attributes<DotGeneralAttrs>{signature.full_dot, precision});
+    const auto dot_first = reduce(
+        full, attributes<ReduceAttrs>{ReduceKind::Sum, signature.output_axes});
     const auto guards = {rank(x, signature.input_rank),
                          rank(w, signature.weight_rank), sum_dot_interchange()};
     rules.push_back(
@@ -238,10 +259,14 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
   // Discover the complete low-rank path in one match rather than relying on
   // a distribution pass followed by reassociation of its newly emitted dot.
   const auto effective_weight = dot_general(
-      x, add(w, dot_general(a, b, matrix, precision)), matrix, precision);
-  const auto low_rank = add(
-      dot_general(x, w, matrix, precision),
-      dot_general(dot_general(x, a, matrix, precision), b, matrix, precision));
+      x,
+      add(w, dot_general(a, b, attributes<DotGeneralAttrs>{matrix, precision})),
+      attributes<DotGeneralAttrs>{matrix, precision});
+  const auto low_rank =
+      add(dot_general(x, w, attributes<DotGeneralAttrs>{matrix, precision}),
+          dot_general(
+              dot_general(x, a, attributes<DotGeneralAttrs>{matrix, precision}),
+              b, attributes<DotGeneralAttrs>{matrix, precision}));
   const auto lora_guards = {rank(x, 2), rank(w, 2), rank(a, 2), rank(b, 2),
                             dot_arithmetic()};
   rules.push_back(rule("expand-lora-projection", effective_weight, low_rank)
@@ -267,15 +292,23 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
   const auto kernel_guards = {rank(q, 3), rank(k, 3), rank(v, 3),
                               dot_arithmetic()};
   for (const auto& signature : kernels) {
-    const auto scores = dot_general(q, k, signature.score_dims, precision);
-    const auto original_numerator = dot_general(scores, v, batch, precision);
-    const auto original_denominator = reduce(scores, ReduceKind::Sum, Axes{2});
-    const auto summary_numerator =
-        dot_general(q, dot_general(k, v, signature.summary_dims, precision),
-                    batch, precision);
+    const auto scores = dot_general(
+        q, k, attributes<DotGeneralAttrs>{signature.score_dims, precision});
+    const auto original_numerator =
+        dot_general(scores, v, attributes<DotGeneralAttrs>{batch, precision});
+    const auto original_denominator =
+        reduce(scores, attributes<ReduceAttrs>{ReduceKind::Sum, Axes{2}});
+    const auto summary_numerator = dot_general(
+        q,
+        dot_general(
+            k, v,
+            attributes<DotGeneralAttrs>{signature.summary_dims, precision}),
+        attributes<DotGeneralAttrs>{batch, precision});
     const auto summary_denominator =
-        dot_general(q, reduce(k, ReduceKind::Sum, signature.key_sum_axes),
-                    batch, precision);
+        dot_general(q,
+                    reduce(k, attributes<ReduceAttrs>{ReduceKind::Sum,
+                                                      signature.key_sum_axes}),
+                    attributes<DotGeneralAttrs>{batch, precision});
     const std::string name =
         std::string("kernel-attention-summaries") + signature.suffix;
     rules.push_back(rule(name,
@@ -301,7 +334,8 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
         nested ? broadcast_in_dim(direct, broadcast1) : direct;
     rules.push_back(
         rule(nested ? "dot-divide-broadcast-nested" : "dot-divide-broadcast",
-             dot_general(divide(x, expanded), v, division_dims, precision))
+             dot_general(divide(x, expanded), v,
+                         attributes<DotGeneralAttrs>{division_dims, precision}))
             .when(dot_division())
             .build([=](const Match& m, RhsBuilder& rhs) {
               auto axes = m[broadcast0].dimensions;
@@ -316,20 +350,29 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
 
   // ||A^T B||_F^2 = <AA^T, BB^T>. This isolated norm equation does not rewrite
   // Barlow's diagonal gather or eliminate the full loss's other consumers.
-  const auto sample_gram_norm =
-      reduce(multiply(dot_general(a, a, dot_dims({1}, {1}), precision),
-                      dot_general(b, b, dot_dims({1}, {1}), precision)),
-             ReduceKind::Sum, Axes{0, 1});
+  const auto sample_gram_norm = reduce(
+      multiply(
+          dot_general(
+              a, a, attributes<DotGeneralAttrs>{dot_dims({1}, {1}), precision}),
+          dot_general(
+              b, b,
+              attributes<DotGeneralAttrs>{dot_dims({1}, {1}), precision})),
+      attributes<ReduceAttrs>{ReduceKind::Sum, Axes{0, 1}});
   for (bool folded : {false, true}) {
     const auto correlation =
-        folded ? dot_general(a, b, dot_dims({0}, {0}), precision)
-               : dot_general(transpose(a, Axes{1, 0}), b, matrix, precision);
-    rules.push_back(rule(folded ? "feature-gram-to-sample-gram-folded"
-                                : "feature-gram-to-sample-gram",
-                         reduce(multiply(correlation, correlation),
-                                ReduceKind::Sum, Axes{0, 1}),
-                         sample_gram_norm)
-                        .when({rank(a, 2), rank(b, 2), dot_arithmetic()}));
+        folded
+            ? dot_general(
+                  a, b,
+                  attributes<DotGeneralAttrs>{dot_dims({0}, {0}), precision})
+            : dot_general(transpose(a, attributes<TransposeAttrs>{Axes{1, 0}}),
+                          b, attributes<DotGeneralAttrs>{matrix, precision});
+    rules.push_back(
+        rule(folded ? "feature-gram-to-sample-gram-folded"
+                    : "feature-gram-to-sample-gram",
+             reduce(multiply(correlation, correlation),
+                    attributes<ReduceAttrs>{ReduceKind::Sum, Axes{0, 1}}),
+             sample_gram_norm)
+            .when({rank(a, 2), rank(b, 2), dot_arithmetic()}));
   }
 
   // Sum((x - mean(x))^2) = sum(x^2) - sum(x)^2 / N. This deliberately
@@ -339,7 +382,7 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
   const auto mean_broadcast = attribute_var<BroadcastAttrs>("mean_broadcast"),
              count_broadcast = attribute_var<BroadcastAttrs>("count_broadcast"),
              kept_broadcast = attribute_var<BroadcastAttrs>("kept_broadcast");
-  const auto sum_x = reduce(x, ReduceKind::Sum, axes);
+  const auto sum_x = reduce(x, attributes<ReduceAttrs>{ReduceKind::Sum, axes});
   for (bool keepdims : {false, true}) {
     const auto mean =
         divide(keepdims ? broadcast_in_dim(sum_x, kept_broadcast) : sum_x,
@@ -348,7 +391,8 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
     rules.push_back(
         rule(keepdims ? "centered-square-to-raw-moments-keepdims"
                       : "centered-square-to-raw-moments",
-             reduce(multiply(centered, centered), ReduceKind::Sum, axes))
+             reduce(multiply(centered, centered),
+                    attributes<ReduceAttrs>{ReduceKind::Sum, axes}))
             .when({scalar(count), raw_moments()})
             .build([=](const Match& m, RhsBuilder& rhs) {
               auto xt = m.type(x);
@@ -404,17 +448,17 @@ std::vector<TensorRewrite> buildSemanticRules(NumericalPolicy policy,
                     "raw moments require canonical reduction broadcasts");
               }
               const auto value = rhs.ref(m[x]);
-              const auto sum = rhs.reduce(value, ReduceKind::Sum, reduced);
-              const auto square =
-                  rhs.operation(OpKind::Multiply, NoAttrs{}, {value, value});
-              const auto sum_square =
-                  rhs.operation(OpKind::Multiply, NoAttrs{}, {sum, sum});
-              const auto divisor =
-                  rhs.broadcast_in_dim(rhs.ref(m[count]), {{}, st});
-              return rhs.operation(
-                  OpKind::Subtract, NoAttrs{},
-                  {rhs.reduce(square, ReduceKind::Sum, reduced),
-                   rhs.divide(sum_square, divisor)});
+              const auto sum = rhs.make(
+                  reduce, ReduceAttrs{ReduceKind::Sum, reduced}, value);
+              const auto square = rhs.make(multiply, value, value);
+              const auto sum_square = rhs.make(multiply, sum, sum);
+              const auto divisor = rhs.make(
+                  broadcast_in_dim, BroadcastAttrs{{}, st}, rhs.ref(m[count]));
+              return rhs.make(
+                  subtract,
+                  rhs.make(reduce, ReduceAttrs{ReduceKind::Sum, reduced},
+                           square),
+                  rhs.make(divide, sum_square, divisor));
             }));
   }
   return compileRules(std::move(rules), policy, std::move(options));

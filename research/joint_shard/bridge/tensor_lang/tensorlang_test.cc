@@ -7,6 +7,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "eggc/egraph.hpp"
 #include "eggc/extract.hpp"
+#include "eggc/pattern.hpp"
 #include "eggc/runner.hpp"
 #include "gtest/gtest.h"
 #include "research/joint_shard/bridge/tensor_lang/tensor_analysis.h"
@@ -47,9 +48,9 @@ TEST_F(TensorLangTest, IdentityIncludesNativeAttributesAndResultType) {
   EXPECT_NE(t, u);
   graph.rebuild();
   EXPECT_NE(graph.find(t), graph.find(u));
-  auto pattern = TensorPattern::node(
+  auto pattern = eggc::Pattern<TensorNode>::node(
       TensorNode{OpKind::Transpose, TransposeAttrs{{0, 1}}, {0}},
-      {TensorPattern::var("x")});
+      {eggc::Pattern<TensorNode>::var("x")});
   EXPECT_EQ(eggc::match(graph, pattern, t).size(), 1);
   EXPECT_TRUE(eggc::match(graph, pattern, u).empty());
 }

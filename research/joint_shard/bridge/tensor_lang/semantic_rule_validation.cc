@@ -6,25 +6,10 @@ namespace joint_shard::semantic_detail {
 namespace {
 struct Variable {
   enum Kind { Tensor, Operator, Attribute } kind;
-  unsigned detail;  // Operator arity or attribute value variant index.
+  unsigned arity = 0;
+  std::type_index type = typeid(void);
   bool operator==(const Variable&) const = default;
 };
-unsigned attributeType(AttributeField field) {
-  switch (field) {
-    case AttributeField::Axes:
-    case AttributeField::Permutation:
-      return 0;
-    case AttributeField::ReduceKind:
-      return 1;
-    case AttributeField::PrecisionConfig:
-      return 2;
-    case AttributeField::DotDimensions:
-      return 3;
-    case AttributeField::Broadcast:
-      return 4;
-  }
-  throw std::logic_error("invalid attribute field");
-}
 }  // namespace
 void validateRule(const Rule& rule) {
   const auto fail = [&](const std::string& reason) {
@@ -53,9 +38,12 @@ void validateRule(const Rule& rule) {
       bind(term.name,
            {Variable::Operator, static_cast<unsigned>(term.children.size())},
            lhs);
-    for (const auto& field : term.attributes)
+    for (const auto& field : term.attributes) {
+      if (!lhs && std::holds_alternative<patterns::Wildcard>(field.expression))
+        fail("RHS wildcard attribute '" + std::string(field.field) + "'");
       if (const auto* name = std::get_if<std::string>(&field.expression))
-        bind(*name, {Variable::Attribute, attributeType(field.field)}, lhs);
+        bind(*name, {Variable::Attribute, 0, field.type}, lhs);
+    }
     for (const auto& child : term.children) self(self, child, lhs);
   };
   visit(visit, rule.lhs, true);
@@ -70,7 +58,7 @@ void validateRule(const Rule& rule) {
     if (found->second.kind != expected)
       fail("guard variable has wrong type: '" + predicate.subject + "'");
     if (predicate.isProperty() && predicate.operand &&
-        *predicate.operand >= found->second.detail)
+        *predicate.operand >= found->second.arity)
       fail("property operand exceeds matched operator arity");
   }
 }

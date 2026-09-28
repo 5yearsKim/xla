@@ -2,19 +2,20 @@
 
 The implementation keeps TensorLang semantics in `bridge/tensor_lang/` and the
 MLIR bridge, region driver, and Shardy pipeline in their existing directories.
-No descriptor table, operator-string encoding, or TensorLang dependency in
-`egg-c` is needed.
+TensorLang declares its structural schema once; generic C++ adapters provide
+matching and construction. The `egg-c` engine has no TensorLang dependency.
 
 | File | Responsibility |
 | --- | --- |
-| `tensorlang.h/.cc` | Native nodes, typed semantic attrs, shared operator schema, equality/hash |
+| `tensorlang.def` | Authoritative operation/attribute declarations and field policies |
+| `tensorlang.h/.cc`, `tensor_attributes.h` | Generated native records, traits, runtime schema, structural equality/hash/formatting |
 | `tensor_analysis.h/.cc` | Standalone inference and monotone e-class type/constant facts |
 | `op_properties.h/.cc` | Candidate properties by OpKind and contextual decisions with rejection reasons |
-| `tensor_patterns.h/.cc` | Typed C++ pattern builders, guards and checked callback expressions |
+| `tensor_patterns.h/.cc` | Generic schema-derived operators, field captures, guards and checked callback expressions |
 | `semantic_rewrite.cc` | Pattern compilation and rule-group filtering |
 | `semantic_rule_validation.cc` | Variable bindings, arities and rule definition validation |
 | `semantic_rule_matcher.cc` | Bounded streaming tensor/operator/attribute matching and value predicates |
-| `semantic_rule_attributes.cc` | Typed field contracts, concrete attribute matching and checked RHS construction |
+| `semantic_rule_attributes.cc` | Generic field matching and attribute resolution for RHS construction |
 | `semantic_rule_guards.cc` | Numerical guards for dedicated arithmetic rules |
 | `semantic_rule_application.cc` | Property checks, complete RHS preparation and rule application |
 | `semantic_rule_internal.h` | Private AST, binding and search contracts |
@@ -40,12 +41,26 @@ joint_shard::TensorNode node{joint_shard::OpKind::Transpose,
 and arity while ignoring operand IDs. MLIR handles in attrs are immutable and
 context-owned; retain the context throughout graph use and export.
 
-`opSchemas` / `opSchema` / `lookupOpSchema` provide canonical StableHLO names, arities, and whether
-a concrete pattern operator can use `NoAttrs`. Add new operations here and implement attribute
-validation, inference, importer, and exporter together. Property-indexed semantic
-search iterates registered schemas rather than relying on enum ordering.
-`stableHloName` uses that same table. Short text-DSL operator-name aliases are
-no longer accepted; concrete patterns use `OpKind`.
+Define operations and attribute records in `tensorlang.def`. Its repeated macro
+expansions produce `OpKind`, native attribute structs, `OpAttrs`, field descriptors,
+`OpTraits<Kind>`, runtime schema views, and the callable pattern objects in
+`tensorlang::ops`. No per-operation pattern functions are needed.
+
+Each operation declares its kind, callable name, external name, arity, and
+attribute record. Each field declares a C++ type and a policy:
+
+- **Required:** an explicit literal, capture, or LHS wildcard is needed.
+- **Default:** omission matches and constructs the zero value (for example,
+  absent dot precision/algorithm/extra metadata).
+- **Inferred:** omission matches any value; RHS construction computes the
+  derived value (dot result types and reduction identities).
+
+`opSchemas` / `opSchema` / `lookupOpSchema` expose the generated runtime views.
+`validNodeSchema` checks operand count and the declared attribute record.
+Field traversal also supplies hashing and formatting, so new fields participate
+in node identity automatically. Mathematical inference, contextual properties,
+and StableHLO import/export are explicit semantic implementations; adding an
+operation may require extending those contracts, but never the pattern vocabulary.
 
 `inferTensorNode(node, operandFacts)` returns **Valid**, **Unknown**, or
 **Invalid**, with an explanation. It does not access or mutate an e-graph.
@@ -113,12 +128,13 @@ must also be enabled.
 
 Include `bridge/tensor_lang/tensor_patterns.h` and use the
 `joint_shard::patterns` namespace. Tensor, operator, and attribute variables are
-explicit C++ types; capitalization has no meaning. Concrete operation builders
-use `OpKind`, and operator variables capture kind, complete attrs, and arity.
+explicit C++ types; capitalization has no meaning. Concrete operators come from `joint_shard::tensorlang::ops`; operator variables
+capture kind, complete attrs, and arity.
 
 ```cpp
 using namespace joint_shard;
 using namespace joint_shard::patterns;
+using namespace joint_shard::tensorlang::ops;
 const auto a = tensor_var("a"), x = tensor_var("x"), y = tensor_var("y");
 const auto F = operator_var("F", 2);
 auto definition = rule("factor-right", add(F(a, x), F(a, y)),
@@ -129,9 +145,10 @@ auto rewrites = compileRules({definition}, NumericalPolicy::AllowReassociation);
 
 `rule(name, lhs, rhs).when(...)` describes an equation. `.when` accepts one
 guard or an initializer list of guards. Copying a definition and adding guards
-leaves the original unchanged. Concrete attribute-free operations have ordinary
-C++ builders such as `add`, `multiply`, and `negate`; `operation(OpKind, operands)`
-provides access to the other attribute-free operators.
+leaves the original unchanged. Concrete operations are generated callable objects
+such as `add`, `multiply`, and `negate`, backed by one generic template. Their
+operand counts and attribute types are checked at compile time. The explicit
+`operator_var("F", 2)` declaration still checks its arity at runtime.
 
 Attributes are typed literals or `attribute_var<T>` bindings. Dot dimensions
 are captured together as `DotDimensions`, which contains the contracting and
@@ -139,25 +156,35 @@ batching lists for both operands. `dot_dims` constructs a literal. Repeated
 variables must match exactly; variables used in the RHS must be bound on the
 LHS. A name cannot be reused across tensor, operator, or attribute types.
 
+Use `attributes<Record>` to specify individual fields, or pass a native record
+literal / `attribute_var<Record>` to match the complete record. Fields use the
+same names and types as TensorLang. Both positional and designated initializers
+are supported. `any_attribute` is an explicit LHS wildcard; it cannot appear on
+a declarative RHS. Empty and absent optional metadata dictionaries match the
+same default, while node identity and whole-record captures retain exact handles.
+
 ```cpp
 const auto x = tensor_var("x"), w = tensor_var("w");
 const auto p = attribute_var<mlir::ArrayAttr>("precision");
 auto project_first = rule(
     "project-before-sequence-sum",
-    dot_general(reduce(x, ReduceKind::Sum, Axes{1}), w, dot_dims({1}, {0}), p),
-    reduce(dot_general(x, w, dot_dims({2}, {0}), p), ReduceKind::Sum, Axes{1}))
+    dot_general(reduce(x, attributes<ReduceAttrs>{ReduceKind::Sum, Axes{1}}), w,
+                attributes<DotGeneralAttrs>{dot_dims({1}, {0}), p}),
+    reduce(dot_general(x, w,
+                       attributes<DotGeneralAttrs>{dot_dims({2}, {0}), p}),
+           attributes<ReduceAttrs>{ReduceKind::Sum, Axes{1}}))
     .when({rank(x, 3), rank(w, 2), sum_dot_interchange()});
 ```
 
-| Constructor | Typed attributes | Contract |
-| --- | --- | --- |
-| `dot_general(a, b, dims, precision)` | `DotDimensions`, `mlir::ArrayAttr` | Omitted precision matches absence; a variable captures the exact configuration including absence. Algorithms and nonempty extra attrs do not match. RHS result type is inferred. |
-| `reduce(x, kind, axes)` | `ReduceKind`, `Axes` | Only canonical identity initializers match. The RHS identity is constructed for the operand dtype. |
-| `transpose(x, permutation)` | `Axes` | Result type follows the operand and permutation. |
-| `broadcast_in_dim(x, attrs)` | `BroadcastAttrs` | Captures both dimensions and destination type. Copying attrs preserves that type; use a callback to construct a broadcast at another shape. |
+`DotGeneralAttrs::dimensions` stores the shared `DotDimensions` record. Default
+dot patterns require absent algorithms and empty extra metadata. Capturing or
+explicitly specifying those fields preserves their values; algebraic guards
+still reject unsupported metadata. Dot result types are inferred on the RHS
+unless supplied. Reductions use canonical identity initializers; broadcast
+records include both the dimension mapping and destination type.
 
-C++ checks constructor types and guard signatures. Constructors check operator
-arity. `compileRules` checks variable bindings, consistent attribute types and
+C++ checks constructor types and guard signatures. Concrete calls check operator arity at compile time; operator variables check
+it at runtime. `compileRules` checks variable bindings, consistent attribute types and
 operator arities, unique rule names, guard subjects, and that each definition
 has exactly one RHS. It validates even definitions disabled by a rule group.
 Errors identify the rule name. The equations remain trusted: type and numerical
@@ -181,19 +208,23 @@ For example, composing arbitrary valid permutations needs a small callback:
 ```cpp
 const auto x = tensor_var("x");
 const auto p = attribute_var<Axes>("inner"), q = attribute_var<Axes>("outer");
-auto compose = rule("compose-transposes", transpose(transpose(x, p), q))
+auto compose = rule("compose-transposes",
+                    transpose(transpose(x, attributes<TransposeAttrs>{p}),
+                              attributes<TransposeAttrs>{q}))
     .build([=](const Match& match, RhsBuilder& rhs) {
       auto inner = match[p], outer = match[q];
       if (inner.size() != outer.size()) return rhs.reject("ranks differ");
       Axes result;
       for (auto axis : outer) result.push_back(inner.at(axis));
-      return rhs.transpose(rhs.ref(match[x]), std::move(result));
+      return rhs.make(transpose, TransposeAttrs{std::move(result)}, rhs.ref(match[x]));
     });
 ```
 
-`RhsBuilder` provides checked `dot_general`, `reduce`, `transpose`,
-`broadcast_in_dim`, `divide`, `negate`, and a general
-`operation(OpKind, attrs, operands)` constructor.
+`RhsBuilder::make(op, attrs, operands...)` accepts a generated operator and its
+native attribute record. For attribute-free operations, use
+`rhs.make(add, a, b)` without an attribute argument. Both declarative RHS patterns
+and callbacks use `completeTensorNode`: omitted derived fields are completed,
+then the operation is validated with the shared inference contract.
 `apply(F, operands)` uses a captured operator's attrs and preserves its property
 checks at the new operand shapes. `reject(reason)` declines a structural match.
 Unbound or wrongly typed callback bindings become reported rejections. Other

@@ -2,11 +2,12 @@
 #define RESEARCH_JOINT_SHARD_BRIDGE_TENSORLANG_H_
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -14,105 +15,114 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "eggc/expr.hpp"
 #include "eggc/language.hpp"
-#include "eggc/pattern.hpp"
 
 namespace joint_shard {
+using Axes = std::vector<int64_t>;
+enum class ReduceKind { Sum, Max, Min, Product };
+enum class FieldPolicy { Required, Default, Inferred };
+
+#define TENSOR_FIELD(record, type, name, policy) type name{};
+#define TENSOR_VALUE(record, fields)                                    \
+  struct record {                                                       \
+    fields(TENSOR_FIELD, record) bool operator==(const record&) const = \
+        default;                                                        \
+  };
+#define TENSOR_ATTRS TENSOR_VALUE
+#define TENSOR_OP(kind, name, external, arity, attrs)
+#include "research/joint_shard/bridge/tensor_lang/tensorlang.def"
+#undef TENSOR_OP
+#undef TENSOR_ATTRS
+#undef TENSOR_VALUE
+#undef TENSOR_FIELD
+
+inline DotDimensions dot_dims(Axes lhs_contracting, Axes rhs_contracting,
+                              Axes lhs_batching = {}, Axes rhs_batching = {}) {
+  return {std::move(lhs_contracting), std::move(rhs_contracting),
+          std::move(lhs_batching), std::move(rhs_batching)};
+}
+
+// Field descriptors refer to the actual record members. All users traverse
+// these descriptors rather than maintaining their own list of attributes.
+template <class Record>
+struct AttributeSchema;
+template <auto Member>
+struct AttributeField {
+  std::string_view name;
+  FieldPolicy policy;
+  static constexpr auto member = Member;
+};
+#define TENSOR_FIELD(record, type, name, policy) \
+  AttributeField<&record::name>{#name, FieldPolicy::policy},
+#define TENSOR_VALUE(record, fields)                                          \
+  template <>                                                                 \
+  struct AttributeSchema<record> {                                            \
+    static constexpr auto members = std::tuple{fields(TENSOR_FIELD, record)}; \
+  };
+#define TENSOR_ATTRS TENSOR_VALUE
+#define TENSOR_OP(kind, name, external, arity, attrs)
+#include "research/joint_shard/bridge/tensor_lang/tensorlang.def"
+#undef TENSOR_OP
+#undef TENSOR_ATTRS
+#undef TENSOR_VALUE
+#undef TENSOR_FIELD
+
+template <class Record, class Function>
+void visitAttributeFields(Record&& record, Function&& function) {
+  std::apply(
+      [&](auto... field) {
+        (function(field, record.*(decltype(field)::member)), ...);
+      },
+      AttributeSchema<std::remove_cvref_t<Record>>::members);
+}
+
+template <class Tuple>
+struct AttributeVariant;
+template <class... T>
+struct AttributeVariant<std::tuple<T...>> {
+  using type = std::variant<T...>;
+};
+// clang-format off
+using OpAttributeRecords = decltype(std::tuple_cat(std::tuple<>{}
+#define TENSOR_VALUE(record, fields)
+#define TENSOR_ATTRS(record, fields) , std::tuple<record>{}
+#define TENSOR_OP(kind, name, external, arity, attrs)
+#include "research/joint_shard/bridge/tensor_lang/tensorlang.def"
+#undef TENSOR_OP
+#undef TENSOR_ATTRS
+#undef TENSOR_VALUE
+));
+// clang-format on
+using OpAttrs = AttributeVariant<OpAttributeRecords>::type;
 
 enum class OpKind {
-  Input,
-  Constant,
-  Add,
-  Subtract,
-  Multiply,
-  Divide,
-  Maximum,
-  Minimum,
-  Negate,
-  Exp,
-  Log,
-  Sqrt,
-  Tanh,
-  DotGeneral,
-  Reduce,
-  BroadcastInDim,
-  Reshape,
-  Transpose,
+#define TENSOR_VALUE(record, fields)
+#define TENSOR_ATTRS(record, fields)
+#define TENSOR_OP(kind, name, external, arity, attrs) kind,
+#include "research/joint_shard/bridge/tensor_lang/tensorlang.def"
+#undef TENSOR_OP
+#undef TENSOR_ATTRS
+#undef TENSOR_VALUE
 };
+template <OpKind Kind>
+struct OpTraits;
+#define TENSOR_VALUE(record, fields)
+#define TENSOR_ATTRS(record, fields)
+#define TENSOR_OP(kind, callable, external, operands, record) \
+  template <>                                                 \
+  struct OpTraits<OpKind::kind> {                             \
+    using Attributes = record;                                \
+    static constexpr unsigned arity = operands;               \
+    static constexpr std::string_view name = external;        \
+  };
+#include "research/joint_shard/bridge/tensor_lang/tensorlang.def"
+#undef TENSOR_OP
+#undef TENSOR_ATTRS
+#undef TENSOR_VALUE
 
 const char* stableHloName(OpKind kind);
 
-struct NoAttrs {
-  bool operator==(const NoAttrs&) const noexcept { return true; }
-};
-struct InputAttrs {
-  unsigned index;
-  mlir::RankedTensorType type;
-  bool operator==(const InputAttrs& rhs) const {
-    return index == rhs.index && type == rhs.type;
-  }
-};
-struct DotGeneralAttrs {
-  std::vector<int64_t> lhs_contracting;
-  std::vector<int64_t> rhs_contracting;
-  std::vector<int64_t> lhs_batching;
-  std::vector<int64_t> rhs_batching;
-  mlir::ArrayAttr precision_config;
-  mlir::Attribute algorithm;
-  // Explicit result type conservatively preserves dtype/encoding and dynamism.
-  mlir::RankedTensorType result_type;
-  // Manual producers may preserve extra attributes. The importer treats
-  // unknown metadata as a boundary, and algebraic rules reject this dictionary
-  // when nonempty. Managed dimensions/precision/algorithm cannot occur here.
-  mlir::DictionaryAttr extra_attributes;
-  bool operator==(const DotGeneralAttrs& rhs) const {
-    return std::tie(lhs_contracting, rhs_contracting, lhs_batching,
-                    rhs_batching, precision_config, algorithm, result_type,
-                    extra_attributes) ==
-           std::tie(rhs.lhs_contracting, rhs.rhs_contracting, rhs.lhs_batching,
-                    rhs.rhs_batching, rhs.precision_config, rhs.algorithm,
-                    rhs.result_type, rhs.extra_attributes);
-  }
-};
-struct TransposeAttrs {
-  std::vector<int64_t> permutation;
-  bool operator==(const TransposeAttrs& rhs) const {
-    return permutation == rhs.permutation;
-  }
-};
-struct ReshapeAttrs {
-  mlir::RankedTensorType result_type;
-  bool operator==(const ReshapeAttrs& rhs) const {
-    return result_type == rhs.result_type;
-  }
-};
-struct BroadcastAttrs {
-  std::vector<int64_t> dimensions;
-  mlir::RankedTensorType result_type;
-  bool operator==(const BroadcastAttrs& rhs) const {
-    return dimensions == rhs.dimensions && result_type == rhs.result_type;
-  }
-};
-struct ConstantAttrs {
-  mlir::ElementsAttr value;
-  bool operator==(const ConstantAttrs& rhs) const { return value == rhs.value; }
-};
-enum class ReduceKind { Sum, Max, Min, Product };
-struct ReduceAttrs {
-  ReduceKind kind;
-  std::vector<int64_t> axes;
-  // Only validated canonical identity-initialized reducers use this form.
-  mlir::ElementsAttr initializer;
-  bool operator==(const ReduceAttrs& rhs) const {
-    return kind == rhs.kind && axes == rhs.axes &&
-           initializer == rhs.initializer;
-  }
-};
-using OpAttrs =
-    std::variant<NoAttrs, InputAttrs, DotGeneralAttrs, TransposeAttrs,
-                 ReshapeAttrs, BroadcastAttrs, ConstantAttrs, ReduceAttrs>;
-
 // MLIR handles in attributes are context-owned. Keep the context alive through
-// graph use/export. No descriptor table or encoded operator strings are needed.
+// graph use/export. Nodes store native handles, not encoded operator strings.
 struct TensorNode {
   // matches() compares the complete non-child identity, so egg-c may use its
   // memo table when every variable in a subpattern is already bound.
@@ -129,12 +139,13 @@ struct TensorNode {
   std::size_t hash() const;
   std::string format() const;
 };
-// One schema is shared by patterns, importer, analysis, and exporter.
+// Runtime views are generated from the same definition as compile-time traits.
 struct OpSchema {
   OpKind op;
   std::string_view name;
   unsigned arity;
   bool attribute_free;
+  bool (*accepts_attributes)(const OpAttrs&);
 };
 std::span<const OpSchema> opSchemas();
 const OpSchema* opSchema(OpKind op);
@@ -142,8 +153,5 @@ const OpSchema* lookupOpSchema(std::string_view name);
 bool validNodeSchema(const TensorNode& node);
 
 using TensorRecExpr = eggc::RecExpr<TensorNode>;
-using TensorPattern = eggc::Pattern<TensorNode>;
-
 }  // namespace joint_shard
-
-#endif  // RESEARCH_JOINT_SHARD_BRIDGE_TENSORLANG_H_
+#endif

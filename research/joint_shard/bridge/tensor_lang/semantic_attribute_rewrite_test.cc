@@ -11,6 +11,7 @@
 #include "stablehlo/dialect/StablehloOps.h"
 
 namespace joint_shard {
+using patterns::attributes;
 namespace {
 // Independent dense interpreter: enumerate operand elements rather than reuse
 // the optimizer's inference or matrix-chain transformations.
@@ -129,15 +130,15 @@ Dense<T> evaluate(const TensorRecExpr& expression,
     const auto& rhs = values.at(node.operands[1]);
     const auto& attrs = std::get<DotGeneralAttrs>(node.attrs);
     Dense<T> result;
-    for (auto axis : attrs.lhs_batching)
+    for (auto axis : attrs.dimensions.lhs_batching)
       result.shape.push_back(lhs.shape[axis]);
     for (size_t axis = 0; axis < lhs.shape.size(); ++axis)
-      if (!contains(attrs.lhs_batching, axis) &&
-          !contains(attrs.lhs_contracting, axis))
+      if (!contains(attrs.dimensions.lhs_batching, axis) &&
+          !contains(attrs.dimensions.lhs_contracting, axis))
         result.shape.push_back(lhs.shape[axis]);
     for (size_t axis = 0; axis < rhs.shape.size(); ++axis)
-      if (!contains(attrs.rhs_batching, axis) &&
-          !contains(attrs.rhs_contracting, axis))
+      if (!contains(attrs.dimensions.rhs_batching, axis) &&
+          !contains(attrs.dimensions.rhs_contracting, axis))
         result.shape.push_back(rhs.shape[axis]);
     size_t count = std::accumulate(result.shape.begin(), result.shape.end(),
                                    size_t{1}, std::multiplies<>());
@@ -147,20 +148,23 @@ Dense<T> evaluate(const TensorRecExpr& expression,
       for (size_t j = 0; j < rhs.values.size(); ++j) {
         auto r = coordinates(j, rhs.shape);
         bool matches = true;
-        for (size_t k = 0; k < attrs.lhs_contracting.size(); ++k)
-          matches &= l[attrs.lhs_contracting[k]] == r[attrs.rhs_contracting[k]];
-        for (size_t k = 0; k < attrs.lhs_batching.size(); ++k)
-          matches &= l[attrs.lhs_batching[k]] == r[attrs.rhs_batching[k]];
+        for (size_t k = 0; k < attrs.dimensions.lhs_contracting.size(); ++k)
+          matches &= l[attrs.dimensions.lhs_contracting[k]] ==
+                     r[attrs.dimensions.rhs_contracting[k]];
+        for (size_t k = 0; k < attrs.dimensions.lhs_batching.size(); ++k)
+          matches &= l[attrs.dimensions.lhs_batching[k]] ==
+                     r[attrs.dimensions.rhs_batching[k]];
         if (!matches) continue;
         std::vector<int64_t> output;
-        for (auto axis : attrs.lhs_batching) output.push_back(l[axis]);
+        for (auto axis : attrs.dimensions.lhs_batching)
+          output.push_back(l[axis]);
         for (size_t axis = 0; axis < l.size(); ++axis)
-          if (!contains(attrs.lhs_batching, axis) &&
-              !contains(attrs.lhs_contracting, axis))
+          if (!contains(attrs.dimensions.lhs_batching, axis) &&
+              !contains(attrs.dimensions.lhs_contracting, axis))
             output.push_back(l[axis]);
         for (size_t axis = 0; axis < r.size(); ++axis)
-          if (!contains(attrs.rhs_batching, axis) &&
-              !contains(attrs.rhs_contracting, axis))
+          if (!contains(attrs.dimensions.rhs_batching, axis) &&
+              !contains(attrs.dimensions.rhs_contracting, axis))
             output.push_back(r[axis]);
         result.values[offset(output, result.shape)] +=
             lhs.values[i] * rhs.values[j];
@@ -200,10 +204,11 @@ class SemanticAttributeRewriteTest : public ::testing::Test {
                std::vector<int64_t> shape, int64_t lc, int64_t rc, bool batched,
                bool floating) {
     DotGeneralAttrs attrs{
-        {lc},
-        {rc},
-        batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
-        batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
+        DotDimensions{
+            {lc},
+            {rc},
+            batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
+            batched ? std::vector<int64_t>{0} : std::vector<int64_t>{}},
         {},
         {},
         type(shape, floating),
@@ -371,10 +376,11 @@ TensorRecExpr normalizedDot(mlir::MLIRContext& context, int form, bool nested,
     return expr.add(
         {OpKind::DotGeneral,
          DotGeneralAttrs{
-             {batched ? 2 : 1},
-             {batched ? 1 : 0},
-             batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
-             batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
+             DotDimensions{
+                 {batched ? 2 : 1},
+                 {batched ? 1 : 0},
+                 batched ? std::vector<int64_t>{0} : std::vector<int64_t>{},
+                 batched ? std::vector<int64_t>{0} : std::vector<int64_t>{}},
              {},
              {},
              type(outshape),
@@ -490,7 +496,7 @@ TEST_F(SemanticAttributeRewriteTest,
       attrs.precision_config = precision(mlir::stablehlo::Precision::HIGH);
     } else {
       // A valid batch dot with transposed lhs axes, outside our narrow scope.
-      attrs.lhs_contracting = {1};
+      attrs.dimensions.lhs_contracting = {1};
       attrs.result_type = type({2, 4, 5}, true);
       for (auto& node : source.nodes)
         if (node.op == OpKind::Input &&
@@ -557,6 +563,7 @@ TEST_F(SemanticAttributeRewriteTest,
 
 TEST_F(SemanticAttributeRewriteTest, BroadcastAttributesMatchAndBuildExactly) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
   const auto attrs = attribute_var<BroadcastAttrs>("attrs");
   auto source = broadcast_in_dim(negate(x), attrs);
@@ -702,12 +709,14 @@ TEST_F(SemanticAttributeRewriteTest, SumDotAndKernelDenominatorBothDirections) {
 TEST_F(SemanticAttributeRewriteTest,
        AttributeVariablesAndLiteralsMatchDistinctPermutations) {
   const auto pattern_x = patterns::tensor_var("x");
-  const auto pattern_p = patterns::attribute_var<patterns::Axes>("p");
+  const auto pattern_p = patterns::attribute_var<Axes>("p");
 
   auto rules = compileRules(
       {patterns::rule("cancel",
-                      patterns::transpose(
-                          patterns::transpose(pattern_x, pattern_p), pattern_p),
+                      tensorlang::ops::transpose(
+                          tensorlang::ops::transpose(
+                              pattern_x, attributes<TransposeAttrs>{pattern_p}),
+                          attributes<TransposeAttrs>{pattern_p}),
                       pattern_x)
            .when({patterns::rank(pattern_x, 2)})},
       NumericalPolicy::PreserveEvaluation, options);
@@ -795,11 +804,14 @@ TEST_F(SemanticAttributeRewriteTest,
   const auto pattern_x = patterns::tensor_var("x");
 
   const auto xvar = pattern_x;
-  const auto lhs = patterns::transpose(xvar, patterns::Axes{1, 0});
+  const auto lhs =
+      tensorlang::ops::transpose(xvar, attributes<TransposeAttrs>{Axes{1, 0}});
   for (auto rhs :
-       {patterns::transpose(patterns::negate(xvar), patterns::Axes{0, 0}),
-        patterns::reduce(patterns::negate(xvar), ReduceKind::Sum,
-                         patterns::Axes{0})}) {
+       {tensorlang::ops::transpose(tensorlang::ops::negate(xvar),
+                                   attributes<TransposeAttrs>{Axes{0, 0}}),
+        tensorlang::ops::reduce(
+            tensorlang::ops::negate(xvar),
+            attributes<ReduceAttrs>{ReduceKind::Sum, Axes{0}})}) {
     TensorEGraph graph;
     auto x = graph.add({OpKind::Input, InputAttrs{0, type({2, 3})}, {}});
     graph.add({OpKind::Transpose, TransposeAttrs{{1, 0}}, {x}});
@@ -859,35 +871,142 @@ TEST_F(SemanticAttributeRewriteTest,
           canonicalReductionIdentity({kind, {0}, initializer}, element));
     }
 }
+TEST_F(SemanticAttributeRewriteTest, WholeRecordCapturePreservesDotMetadata) {
+  using namespace patterns;
+  using namespace tensorlang::ops;
+  const auto a = tensor_var("a"), b = tensor_var("b");
+  const auto metadata = attribute_var<DotGeneralAttrs>("metadata");
+  const auto dot_pattern = dot_general(a, b, metadata);
+  auto declarative =
+      rule("cancel-around-dot", negate(negate(dot_pattern)), dot_pattern);
+  auto callback =
+      rule("cancel-around-dot-callback", negate(negate(dot_pattern)))
+          .build([=](const Match& m, RhsBuilder& rhs) {
+            return rhs.make(dot_general, m[metadata], rhs.ref(m[a]),
+                            rhs.ref(m[b]));
+          });
+  DotGeneralAttrs attrs{
+      dot_dims({1}, {0}), precision(mlir::stablehlo::Precision::DEFAULT),
+      mlir::StringAttr::get(&context, "opaque-algorithm"), type({3, 5}),
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(
+                        mlir::StringAttr::get(&context, "producer"),
+                        mlir::StringAttr::get(&context, "opaque-metadata"))})};
+  for (const auto& definition : {declarative, callback}) {
+    TensorEGraph graph;
+    auto lhs = graph.add({OpKind::Input, InputAttrs{0, type({3, 4})}, {}});
+    auto rhs = graph.add({OpKind::Input, InputAttrs{1, type({4, 5})}, {}});
+    auto dot = graph.add({OpKind::DotGeneral, attrs, {lhs, rhs}});
+    auto inner = graph.add({OpKind::Negate, NoAttrs{}, {dot}});
+    auto root = graph.add({OpKind::Negate, NoAttrs{}, {inner}});
+    auto count = graph.node_count();
+    eggc::run(graph, compileRules({definition}));
+    EXPECT_EQ(graph.find(root), graph.find(dot));
+    EXPECT_EQ(graph.node_count(), count);
+    EXPECT_EQ(graph.find(root),
+              graph.find(graph.add({OpKind::DotGeneral, attrs, {lhs, rhs}})));
+  }
+}
+
+TEST_F(SemanticAttributeRewriteTest,
+       SchemaFieldsSupportNewAttributeTypesInBothBuilders) {
+  using namespace patterns;
+  using namespace tensorlang::ops;
+  const auto x = tensor_var("x");
+  // RankedTensorType wasn't in the old pattern attribute variant. Reshape
+  // wasn't supported by its typed concrete pattern constructors either.
+  const auto shape = attribute_var<mlir::RankedTensorType>("shape");
+  const auto lhs = reshape(negate(x), attributes<ReshapeAttrs>{shape});
+  auto declarative = rule("reshape-negate", lhs,
+                          negate(reshape(x, attributes<ReshapeAttrs>{shape})));
+  auto callback =
+      rule("reshape-negate-callback", lhs)
+          .build([=](const Match& m, RhsBuilder& rhs) {
+            return rhs.make(negate, rhs.make(reshape, ReshapeAttrs{m[shape]},
+                                             rhs.ref(m[x])));
+          });
+  for (const auto& definition : {declarative, callback}) {
+    TensorEGraph graph;
+    auto value = graph.add({OpKind::Input, InputAttrs{0, type({2, 3})}, {}});
+    auto negated = graph.add({OpKind::Negate, NoAttrs{}, {value}});
+    auto root =
+        graph.add({OpKind::Reshape, ReshapeAttrs{type({6})}, {negated}});
+    eggc::run(graph, compileRules({definition}));
+    auto shaped =
+        graph.add({OpKind::Reshape, ReshapeAttrs{type({6})}, {value}});
+    auto expected = graph.add({OpKind::Negate, NoAttrs{}, {shaped}});
+    EXPECT_EQ(graph.find(root), graph.find(expected));
+  }
+}
+
+TEST_F(SemanticAttributeRewriteTest,
+       WildcardsMatchButCannotConstructRhsAttributes) {
+  using namespace patterns;
+  using namespace tensorlang::ops;
+  const auto x = tensor_var("x");
+  const auto lhs = reshape(negate(x), attributes<ReshapeAttrs>{any_attribute});
+  const auto target_type = type({6});
+  auto definition =
+      rule("wildcard-shape", lhs).build([=](const Match& m, RhsBuilder& rhs) {
+        auto shape = m.type(x);
+        if (!shape || !shape.hasStaticShape() || shape.getNumElements() != 6)
+          return rhs.reject("unexpected shape");
+        return rhs.make(negate, rhs.make(reshape, ReshapeAttrs{target_type},
+                                         rhs.ref(m[x])));
+      });
+  TensorEGraph graph;
+  auto value = graph.add({OpKind::Input, InputAttrs{0, type({2, 3})}, {}});
+  auto negated = graph.add({OpKind::Negate, NoAttrs{}, {value}});
+  auto root = graph.add({OpKind::Reshape, ReshapeAttrs{type({6})}, {negated}});
+  eggc::run(graph, compileRules({definition}));
+  auto shaped = graph.add({OpKind::Reshape, ReshapeAttrs{type({6})}, {value}});
+  auto expected = graph.add({OpKind::Negate, NoAttrs{}, {shaped}});
+  EXPECT_EQ(graph.find(root), graph.find(expected));
+  EXPECT_THROW(compileRules({rule("bad-wildcard", negate(x), lhs)}),
+               std::invalid_argument);
+  EXPECT_THROW(reshape(x), std::invalid_argument);
+}
+
 TEST_F(SemanticAttributeRewriteTest, CppAttributeBindingsHaveConsistentTypes) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
   const auto p = attribute_var<Axes>("p");
-  EXPECT_THROW(compileRules({rule("unbound", transpose(x, p),
-                                  transpose(x, attribute_var<Axes>("q")))}),
-               std::invalid_argument);
-  EXPECT_THROW(compileRules({rule("collision",
-                                  transpose(x, attribute_var<Axes>("x")), x)}),
-               std::invalid_argument);
   EXPECT_THROW(
-      compileRules({rule("wrong-type",
-                         reduce(x, attribute_var<ReduceKind>("p"), p), x)}),
+      compileRules({rule(
+          "unbound", transpose(x, attributes<TransposeAttrs>{p}),
+          transpose(x, attributes<TransposeAttrs>{attribute_var<Axes>("q")}))}),
+      std::invalid_argument);
+  EXPECT_THROW(
+      compileRules({rule(
+          "collision",
+          transpose(x, attributes<TransposeAttrs>{attribute_var<Axes>("x")}),
+          x)}),
+      std::invalid_argument);
+  EXPECT_THROW(
+      compileRules({rule(
+          "wrong-type",
+          reduce(x, attributes<ReduceAttrs>{attribute_var<ReduceKind>("p"), p}),
+          x)}),
       std::invalid_argument);
 }
 TEST_F(SemanticAttributeRewriteTest, CallbackComputesPermutationComposition) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
   const auto inner = attribute_var<Axes>("inner"),
              outer = attribute_var<Axes>("outer");
   auto definition =
-      rule("compose", transpose(transpose(x, inner), outer))
+      rule("compose", transpose(transpose(x, attributes<TransposeAttrs>{inner}),
+                                attributes<TransposeAttrs>{outer}))
           .build([=](const Match& m, RhsBuilder& rhs) {
             auto p = m[inner], q = m[outer];
             if (p.size() != q.size())
               return rhs.reject("permutation ranks differ");
             Axes composed;
             for (auto axis : q) composed.push_back(p.at(axis));
-            return rhs.transpose(rhs.ref(m[x]), std::move(composed));
+            return rhs.make(transpose, TransposeAttrs{std::move(composed)},
+                            rhs.ref(m[x]));
           });
   TensorEGraph graph;
   auto value = graph.add({OpKind::Input, InputAttrs{0, type({2, 3, 4})}, {}});
@@ -903,19 +1022,22 @@ TEST_F(SemanticAttributeRewriteTest, CallbackComputesPermutationComposition) {
 TEST_F(SemanticAttributeRewriteTest,
        CallbackCapturesWholeDotDimensionsAndPrecision) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto a = tensor_var("a"), b = tensor_var("b"), c = tensor_var("c");
   const auto dims = attribute_var<DotDimensions>("dims");
   const auto p = attribute_var<mlir::ArrayAttr>("p");
   auto definition =
       rule("callback-reassociate",
-           dot_general(dot_general(a, b, dims, p), c, dims, p))
+           dot_general(dot_general(a, b, attributes<DotGeneralAttrs>{dims, p}),
+                       c, attributes<DotGeneralAttrs>{dims, p}))
           .when({rank(a, 2), rank(b, 2), rank(c, 2), dot_reassociation()})
           .build([=](const Match& m, RhsBuilder& rhs) {
             if (m[dims] != dot_dims({1}, {0}))
               return rhs.reject("requires matrix dimensions");
-            auto bc =
-                rhs.dot_general(rhs.ref(m[b]), rhs.ref(m[c]), m[dims], m[p]);
-            return rhs.dot_general(rhs.ref(m[a]), bc, m[dims], m[p]);
+            auto bc = rhs.make(dot_general, DotGeneralAttrs{m[dims], m[p]},
+                               rhs.ref(m[b]), rhs.ref(m[c]));
+            return rhs.make(dot_general, DotGeneralAttrs{m[dims], m[p]},
+                            rhs.ref(m[a]), bc);
           });
   for (bool floating : {false, true}) {
     for (auto policy : {NumericalPolicy::PreserveEvaluation,
@@ -950,13 +1072,15 @@ TEST_F(SemanticAttributeRewriteTest,
 }
 TEST_F(SemanticAttributeRewriteTest, CallbackAttributeTypeMismatchIsRejected) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
   const auto p = attribute_var<Axes>("p");
   auto definition =
-      rule("bad-callback-type", transpose(x, p))
+      rule("bad-callback-type", transpose(x, attributes<TransposeAttrs>{p}))
           .build([=](const Match& m, RhsBuilder& rhs) {
             auto dimensions = m[attribute_var<DotDimensions>("p")];
-            return rhs.dot_general(rhs.ref(m[x]), rhs.ref(m[x]), dimensions);
+            return rhs.make(dot_general, DotGeneralAttrs{dimensions},
+                            rhs.ref(m[x]), rhs.ref(m[x]));
           });
   TensorEGraph graph;
   auto value = graph.add({OpKind::Input, InputAttrs{0, type({2, 3})}, {}});

@@ -1,0 +1,79 @@
+// TensorLang's structural definition. Intentionally included multiple times.
+// FIELD(record, type, name, policy): Required fields must be supplied in a
+// pattern; Default fields match/build their zero value; Inferred fields match
+// any value and are computed on the RHS unless explicitly supplied/captured.
+// Shape inference and numerical legality are separate semantic contracts.
+#define DOTDIMENSIONS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, Axes, lhs_contracting, Required) \
+  FIELD(RECORD, Axes, rhs_contracting, Required) \
+  FIELD(RECORD, Axes, lhs_batching, Required) \
+  FIELD(RECORD, Axes, rhs_batching, Required)
+#define NOATTRS_FIELDS(FIELD, RECORD)
+#define INPUTATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, unsigned, index, Required) \
+  FIELD(RECORD, mlir::RankedTensorType, type, Required)
+// Result types retain dtype/encoding and dynamic dimensions. Native producers
+// may carry extra metadata, but managed dot dimensions/precision/algorithm may
+// not be repeated in the dictionary. Algebraic guards reject algorithms and
+// nonempty extra metadata; full-record captures still preserve those fields.
+#define DOTGENERALATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, DotDimensions, dimensions, Required) \
+  FIELD(RECORD, mlir::ArrayAttr, precision_config, Default) \
+  FIELD(RECORD, mlir::Attribute, algorithm, Default) \
+  FIELD(RECORD, mlir::RankedTensorType, result_type, Inferred) \
+  FIELD(RECORD, mlir::DictionaryAttr, extra_attributes, Default)
+#define TRANSPOSEATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, Axes, permutation, Required)
+#define RESHAPEATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, mlir::RankedTensorType, result_type, Required)
+#define BROADCASTATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, Axes, dimensions, Required) \
+  FIELD(RECORD, mlir::RankedTensorType, result_type, Required)
+#define CONSTANTATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, mlir::ElementsAttr, value, Required)
+// Reduce represents canonical identity-initialized reducers. RHS completion
+// derives an omitted initializer from the reduction kind and operand dtype.
+#define REDUCEATTRS_FIELDS(FIELD, RECORD) \
+  FIELD(RECORD, ReduceKind, kind, Required) \
+  FIELD(RECORD, Axes, axes, Required) \
+  FIELD(RECORD, mlir::ElementsAttr, initializer, Inferred)
+
+TENSOR_VALUE(DotDimensions, DOTDIMENSIONS_FIELDS)
+TENSOR_ATTRS(NoAttrs, NOATTRS_FIELDS)
+TENSOR_ATTRS(InputAttrs, INPUTATTRS_FIELDS)
+TENSOR_ATTRS(DotGeneralAttrs, DOTGENERALATTRS_FIELDS)
+TENSOR_ATTRS(TransposeAttrs, TRANSPOSEATTRS_FIELDS)
+TENSOR_ATTRS(ReshapeAttrs, RESHAPEATTRS_FIELDS)
+TENSOR_ATTRS(BroadcastAttrs, BROADCASTATTRS_FIELDS)
+TENSOR_ATTRS(ConstantAttrs, CONSTANTATTRS_FIELDS)
+TENSOR_ATTRS(ReduceAttrs, REDUCEATTRS_FIELDS)
+
+// OP(kind, callable name, external name, operand count, attribute record)
+TENSOR_OP(Input, input, "input", 0, InputAttrs)
+TENSOR_OP(Constant, constant, "stablehlo.constant", 0, ConstantAttrs)
+TENSOR_OP(Add, add, "stablehlo.add", 2, NoAttrs)
+TENSOR_OP(Subtract, subtract, "stablehlo.subtract", 2, NoAttrs)
+TENSOR_OP(Multiply, multiply, "stablehlo.multiply", 2, NoAttrs)
+TENSOR_OP(Divide, divide, "stablehlo.divide", 2, NoAttrs)
+TENSOR_OP(Maximum, maximum, "stablehlo.maximum", 2, NoAttrs)
+TENSOR_OP(Minimum, minimum, "stablehlo.minimum", 2, NoAttrs)
+TENSOR_OP(Negate, negate, "stablehlo.negate", 1, NoAttrs)
+TENSOR_OP(Exp, exp, "stablehlo.exponential", 1, NoAttrs)
+TENSOR_OP(Log, log, "stablehlo.log", 1, NoAttrs)
+TENSOR_OP(Sqrt, sqrt, "stablehlo.sqrt", 1, NoAttrs)
+TENSOR_OP(Tanh, tanh, "stablehlo.tanh", 1, NoAttrs)
+TENSOR_OP(DotGeneral, dot_general, "stablehlo.dot_general", 2, DotGeneralAttrs)
+TENSOR_OP(Reduce, reduce, "stablehlo.reduce", 1, ReduceAttrs)
+TENSOR_OP(BroadcastInDim, broadcast_in_dim, "stablehlo.broadcast_in_dim", 1, BroadcastAttrs)
+TENSOR_OP(Reshape, reshape, "stablehlo.reshape", 1, ReshapeAttrs)
+TENSOR_OP(Transpose, transpose, "stablehlo.transpose", 1, TransposeAttrs)
+
+#undef DOTDIMENSIONS_FIELDS
+#undef NOATTRS_FIELDS
+#undef INPUTATTRS_FIELDS
+#undef DOTGENERALATTRS_FIELDS
+#undef TRANSPOSEATTRS_FIELDS
+#undef RESHAPEATTRS_FIELDS
+#undef BROADCASTATTRS_FIELDS
+#undef CONSTANTATTRS_FIELDS
+#undef REDUCEATTRS_FIELDS

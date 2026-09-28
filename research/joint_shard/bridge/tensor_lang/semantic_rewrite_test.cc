@@ -9,6 +9,7 @@
 #include "research/joint_shard/bridge/tensor_lang/tensor_patterns.h"
 
 namespace joint_shard {
+using patterns::attributes;
 
 namespace {
 class SemanticRewriteTest : public ::testing::Test {
@@ -79,10 +80,10 @@ Matrix evaluateMatrix(const TensorRecExpr& expression,
       values.push_back(std::move(result));
     } else if (node.op == OpKind::DotGeneral) {
       const auto& attrs = std::get<DotGeneralAttrs>(node.attrs);
-      if (attrs.lhs_contracting != std::vector<int64_t>{1} ||
-          attrs.rhs_contracting != std::vector<int64_t>{0} ||
-          !attrs.lhs_batching.empty() || !attrs.rhs_batching.empty() ||
-          a.columns != b.rows)
+      if (attrs.dimensions.lhs_contracting != std::vector<int64_t>{1} ||
+          attrs.dimensions.rhs_contracting != std::vector<int64_t>{0} ||
+          !attrs.dimensions.lhs_batching.empty() ||
+          !attrs.dimensions.rhs_batching.empty() || a.columns != b.rows)
         throw std::logic_error("oracle dot signature mismatch");
       Matrix result{a.rows, b.columns,
                     std::vector<uint32_t>(a.rows * b.columns)};
@@ -165,9 +166,9 @@ TEST_F(SemanticRewriteTest, InvalidRhsMakesNoPartialInsertion) {
   // negate(?x) would insert a node before the add discovered its shape mismatch
   // in the old recursive instantiator. Preparation rejects the entire RHS.
   auto rules = compileRules(
-      {patterns::rule(
-           "mismatch", pattern_F(pattern_F(pattern_x)),
-           patterns::add(patterns::negate(pattern_x), pattern_F(pattern_x)))
+      {patterns::rule("mismatch", pattern_F(pattern_F(pattern_x)),
+                      tensorlang::ops::add(tensorlang::ops::negate(pattern_x),
+                                           pattern_F(pattern_x)))
            .when({patterns::involution(pattern_F)})},
       NumericalPolicy::PreserveEvaluation, options);
   eggc::run(graph, rules, 1);
@@ -195,17 +196,19 @@ TEST_F(SemanticRewriteTest, DotLinearityFactorsTwoDots) {
   auto a = input(graph, 0, integer({2, 3})),
        b = input(graph, 1, integer({3, 4}));
   auto c = input(graph, 2, integer({3, 4}));
-  DotGeneralAttrs attrs{{1}, {0}, {}, {}, {}, {}, integer({2, 4}), {}};
+  DotGeneralAttrs attrs{
+      DotDimensions{{1}, {0}, {}, {}}, {}, {}, integer({2, 4}), {}};
   auto ab = graph.add({OpKind::DotGeneral, attrs, {a, b}});
   auto ac = graph.add({OpKind::DotGeneral, attrs, {a, c}});
   auto root = graph.add({OpKind::Add, NoAttrs{}, {ab, ac}});
   graph.rebuild();
   auto original = TensorExtractor(graph).find_best(root).second;
   auto rules = compileRules(
-      {patterns::rule("factor",
-                      patterns::add(pattern_F(pattern_a, pattern_b),
-                                    pattern_F(pattern_a, pattern_c)),
-                      pattern_F(pattern_a, patterns::add(pattern_b, pattern_c)))
+      {patterns::rule(
+           "factor",
+           tensorlang::ops::add(pattern_F(pattern_a, pattern_b),
+                                pattern_F(pattern_a, pattern_c)),
+           pattern_F(pattern_a, tensorlang::ops::add(pattern_b, pattern_c)))
            .when({patterns::linear_in(pattern_F, 1)})});
   eggc::run(graph, rules);
   auto bc = graph.add({OpKind::Add, NoAttrs{}, {b, c}});
@@ -247,9 +250,10 @@ TEST_F(SemanticRewriteTest, ArbitraryTensorScaleDoesNotProveHomogeneity) {
   auto options = reporting();
   auto count = graph.node_count();
   auto rules = compileRules(
-      {patterns::rule("scale",
-                      pattern_F(patterns::multiply(pattern_scale, pattern_x)),
-                      patterns::multiply(pattern_scale, pattern_F(pattern_x)))
+      {patterns::rule(
+           "scale",
+           pattern_F(tensorlang::ops::multiply(pattern_scale, pattern_x)),
+           tensorlang::ops::multiply(pattern_scale, pattern_F(pattern_x)))
            .when({patterns::homogeneous_in(pattern_F, 0),
                   patterns::uniform(pattern_scale)})},
       NumericalPolicy::PreserveEvaluation, options);
@@ -328,7 +332,8 @@ TEST_F(SemanticRewriteTest,
         {OpKind::BroadcastInDim, BroadcastAttrs{{}, scale_type}, {scalar}});
     auto scaled = graph.add(
         {OpKind::Multiply, NoAttrs{}, {broadcast, slot == 0 ? a : b}});
-    DotGeneralAttrs attrs{{1}, {0}, {}, {}, {}, {}, integer({2, 4}), {}};
+    DotGeneralAttrs attrs{
+        DotDimensions{{1}, {0}, {}, {}}, {}, {}, integer({2, 4}), {}};
     auto root = graph.add({OpKind::DotGeneral, attrs,
                            slot == 0 ? std::vector<eggc::Id>{scaled, b}
                                      : std::vector<eggc::Id>{a, scaled}});
@@ -539,8 +544,9 @@ TEST_F(SemanticRewriteTest, NonScalarRhsScaleLeavesGraphUnchanged) {
   graph.add({OpKind::Add, NoAttrs{}, {a, b}});
   auto options = reporting();
   auto rules = compileRules(
-      {patterns::rule("bad", pattern_F(pattern_s, pattern_x),
-                      patterns::scale(pattern_s, patterns::negate(pattern_x)))
+      {patterns::rule(
+           "bad", pattern_F(pattern_s, pattern_x),
+           patterns::scale(pattern_s, tensorlang::ops::negate(pattern_x)))
            .when({patterns::elementwise(pattern_F)})},
       NumericalPolicy::PreserveEvaluation, options);
   auto count = graph.node_count();
@@ -566,13 +572,38 @@ TEST_F(SemanticRewriteTest, StandaloneInferenceDistinguishesUnknownAndInvalid) {
           .status,
       InferenceStatus::Invalid);
 }
+// Concrete operators reject invalid calls at compile time; operator variables
+// still validate their manually declared arity at runtime.
+static_assert(std::is_invocable_v<decltype(tensorlang::ops::add),
+                                  patterns::TensorVar, patterns::TensorVar>);
+static_assert(
+    !std::is_invocable_v<decltype(tensorlang::ops::add), patterns::TensorVar>);
+static_assert(
+    !std::is_invocable_v<decltype(tensorlang::ops::add), patterns::TensorVar,
+                         patterns::TensorVar, patterns::TensorVar>);
+static_assert(!std::is_invocable_v<decltype(tensorlang::ops::transpose),
+                                   patterns::TensorVar,
+                                   patterns::attributes<ReduceAttrs>>);
+static_assert(!std::is_constructible_v<patterns::Attribute<Axes>,
+                                       patterns::AttributeVar<ReduceKind>>);
+
+TEST_F(SemanticRewriteTest, SchemaDerivedMaximumNeedsNoHandwrittenPattern) {
+  using namespace patterns;
+  const auto x = tensor_var("x");
+  TensorEGraph graph;
+  auto value = input(graph, 0, integer({2, 3}));
+  auto root = graph.add({OpKind::Maximum, NoAttrs{}, {value, value}});
+  eggc::run(graph, compileRules({rule("idempotent-maximum",
+                                      tensorlang::ops::maximum(x, x), x)}));
+  EXPECT_EQ(graph.find(root), graph.find(value));
+}
+
 TEST_F(SemanticRewriteTest, CppDefinitionsValidateBindingsAndArity) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x"), y = tensor_var("y");
   const auto F = operator_var("F", 1), G = operator_var("G", 1);
   EXPECT_THROW(F(x, y), std::invalid_argument);
-  EXPECT_THROW(operation(OpKind::Add, {x}), std::invalid_argument);
-  EXPECT_THROW(operation(OpKind::DotGeneral, {x, y}), std::invalid_argument);
   EXPECT_THROW(linear_in(F, 1), std::invalid_argument);
   EXPECT_THROW(compileRules({rule("unbound", F(x), y)}), std::invalid_argument);
   EXPECT_THROW(compileRules({rule("unbound-op", F(x), G(x))}),
@@ -604,6 +635,7 @@ TEST_F(SemanticRewriteTest, CppDefinitionsValidateBindingsAndArity) {
 }
 TEST_F(SemanticRewriteTest, CopiedDefinitionsHaveIndependentGuards) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   auto x = tensor_var("x");
   auto F = operator_var("F", 1);
   auto original = rule("cancel", F(F(x)), x).when(involution(F));
@@ -620,17 +652,21 @@ TEST_F(SemanticRewriteTest, CopiedDefinitionsHaveIndependentGuards) {
 }
 TEST_F(SemanticRewriteTest, CallbackFailureNeverInsertsChildren) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
-  const auto lhs = transpose(x, Axes{1, 0});
+  const auto lhs = transpose(x, attributes<TransposeAttrs>{Axes{1, 0}});
   for (int mode = 0; mode < 5; ++mode) {
     auto definition =
         rule("callback", lhs).build([=](const Match& m, RhsBuilder& rhs) {
-          auto value = rhs.negate(rhs.ref(m[x]));
+          auto value = rhs.make(negate, rhs.ref(m[x]));
           if (mode == 0) return rhs.reject("unsupported dimensions");
-          if (mode == 1) return rhs.transpose(value, {0, 0});
+          if (mode == 1)
+            return rhs.make(transpose, TransposeAttrs{{0, 0}}, value);
           if (mode == 2) return value;  // Root shape differs.
           if (mode == 3) return rhs.ref(m[tensor_var("missing")]);
-          return rhs.transpose(value, m[attribute_var<Axes>("missing")]);
+          return rhs.make(transpose,
+                          TransposeAttrs{m[attribute_var<Axes>("missing")]},
+                          value);
         });
     TensorEGraph graph;
     auto value = input(graph, 0, integer({2, 3}));
@@ -646,6 +682,7 @@ TEST_F(SemanticRewriteTest, CallbackFailureNeverInsertsChildren) {
 }
 TEST_F(SemanticRewriteTest, CallbackRechecksCapturedOperatorProperties) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x");
   const auto F = operator_var("F", 1);
   const auto dynamic_type = integer({mlir::ShapedType::kDynamic});
@@ -654,8 +691,8 @@ TEST_F(SemanticRewriteTest, CallbackRechecksCapturedOperatorProperties) {
   auto definition = rule("capture", F(x))
                         .when(linear_in(F, 0))
                         .build([=](const Match&, RhsBuilder& rhs) {
-                          auto dynamic = rhs.operation(
-                              OpKind::Input, InputAttrs{99, dynamic_type}, {});
+                          auto dynamic = rhs.make(tensorlang::ops::input,
+                                                  InputAttrs{99, dynamic_type});
                           return rhs.apply(F, {dynamic});
                         });
   TensorEGraph graph;
@@ -673,6 +710,7 @@ TEST_F(SemanticRewriteTest, CallbackRechecksCapturedOperatorProperties) {
 }
 TEST_F(SemanticRewriteTest, CallbackRebuildsCapturedOperator) {
   using namespace patterns;
+  using namespace tensorlang::ops;
   const auto x = tensor_var("x"), y = tensor_var("y");
   const auto F = operator_var("F", 2);
   auto definition = rule("callback-swap", F(x, y))

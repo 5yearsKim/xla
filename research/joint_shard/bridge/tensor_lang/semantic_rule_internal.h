@@ -14,26 +14,14 @@ enum class TermKind {
   ConcreteOperator,
   Scale
 };
-enum class AttributeField {
-  DotDimensions,
-  PrecisionConfig,
-  ReduceKind,
-  Axes,
-  Permutation,
-  Broadcast
-};
-using AttributeValue = std::variant<patterns::Axes, ReduceKind, mlir::ArrayAttr,
-                                    patterns::DotDimensions, BroadcastAttrs>;
-struct AttributePattern {
-  AttributeField field;
-  std::variant<AttributeValue, std::string> expression;
-};
+using AttributeValue = patterns::AttributeValue;
 struct Term {
   std::string name;
   TermKind kind = TermKind::ConcreteOperator;
   OpKind op = OpKind::Input;
   std::vector<Term> children;
-  std::vector<AttributePattern> attributes;
+  OpAttrs initial_attributes = NoAttrs{};
+  std::vector<patterns::AttributeConstraint> attributes;
 };
 enum class PredicateKind {
   Elementwise,

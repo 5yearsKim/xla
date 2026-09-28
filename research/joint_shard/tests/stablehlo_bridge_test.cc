@@ -60,8 +60,8 @@ module {
   ASSERT_EQ(dotNode.op, OpKind::DotGeneral);
   const auto* attrs = std::get_if<DotGeneralAttrs>(&dotNode.attrs);
   ASSERT_NE(attrs, nullptr);
-  EXPECT_EQ(attrs->lhs_contracting, std::vector<int64_t>({1}));
-  EXPECT_EQ(attrs->rhs_contracting, std::vector<int64_t>({0}));
+  EXPECT_EQ(attrs->dimensions.lhs_contracting, std::vector<int64_t>({1}));
+  EXPECT_EQ(attrs->dimensions.rhs_contracting, std::vector<int64_t>({0}));
   EXPECT_EQ(attrs->precision_config, originalDot->getAttr("precision_config"));
   auto expression = TensorExtractor(graph).find_best(root).second;
   mlir::OpBuilder builder(ret);
@@ -106,8 +106,8 @@ module {
   graph.rebuild();
   auto expr = TensorExtractor(graph).find_best(root).second;
   auto& attrs = std::get<DotGeneralAttrs>(expr.nodes.back().attrs);
-  attrs.lhs_contracting = {0};
-  attrs.rhs_contracting = {1};
+  attrs.dimensions.lhs_contracting = {0};
+  attrs.dimensions.rhs_contracting = {1};
   mlir::OpBuilder builder(ret);
   StableHloExporter exporter(builder, ret.getLoc(), inputs);
   auto output = exporter.exportExpr(expr, expr.root());

@@ -12,8 +12,9 @@ the [Python runner](../joint_shard_python/README.md#four-arm-experiment-and-aggr
 providing shape/layout sweeps, numerical checks, and reports.
 
 The TensorLang implementation and extension contracts are in
-[TENSORLANG.md](TENSORLANG.md). The bridge uses structural nodes with typed
-operator attributes;
+[TENSORLANG.md](TENSORLANG.md). The structural definition in `bridge/tensor_lang/tensorlang.def` supplies
+operator kinds, arities, typed attributes, and the callable pattern operators.
+The bridge uses structural nodes with typed operator attributes;
 typed e-class analysis checks tensor types, and ordinary rewrite patterns match
 complete operator attributes. TensorNode implements the language outside egg-c;
 the engine stores it directly and supports custom search/application callbacks.

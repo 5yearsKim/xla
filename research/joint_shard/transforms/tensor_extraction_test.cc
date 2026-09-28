@@ -21,7 +21,8 @@ class TensorExtractionTest : public ::testing::Test {
   }
   TensorNode dot(eggc::Id a, eggc::Id b) {
     return {OpKind::DotGeneral,
-            DotGeneralAttrs{{1}, {0}, {}, {}, {}, {}, tensor({2, 1}), {}},
+            DotGeneralAttrs{
+                DotDimensions{{1}, {0}, {}, {}}, {}, {}, tensor({2, 1}), {}},
             {a, b}};
   }
   // Modular i32 distributivity: dot(a,b) + dot(a,b) == dot(a+a,b).

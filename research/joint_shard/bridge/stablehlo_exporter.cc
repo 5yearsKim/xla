@@ -70,8 +70,9 @@ mlir::Value StableHloExporter::exportNode(const TensorRecExpr& expr,
     state.addAttribute(
         "dot_dimension_numbers",
         mlir::stablehlo::DotDimensionNumbersAttr::get(
-            builder_.getContext(), attrs->lhs_batching, attrs->rhs_batching,
-            attrs->lhs_contracting, attrs->rhs_contracting));
+            builder_.getContext(), attrs->dimensions.lhs_batching,
+            attrs->dimensions.rhs_batching, attrs->dimensions.lhs_contracting,
+            attrs->dimensions.rhs_contracting));
     if (attrs->precision_config)
       state.addAttribute("precision_config", attrs->precision_config);
     if (attrs->algorithm) state.addAttribute("algorithm", attrs->algorithm);
