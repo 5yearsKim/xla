@@ -71,14 +71,14 @@ std::string formatReport(const RegionSummary& report) {
       << "\nInputs: " << report.interface.inputs.size()
       << "\nOutputs: " << report.interface.outputs.size()
       << "\nCandidates extracted: " << report.candidates.size()
-      << "\nBoundary states evaluated: " << report.boundaries_evaluated
+      << "\nInput assignments evaluated: " << report.input_states_evaluated
       << "\nEvaluations: " << report.evaluations
       << "\nBefore best-per-boundary: " << report.feasible_plans << " plans"
       << "\nAfter best-per-boundary: " << report.best_boundary_plans << " plans"
       << "\nAfter reshard dominance: " << report.frontier.size() << " plans"
       << "\nUnknown-cost evaluations: " << report.unknown_cost_plans
       << "\nOversized protected region: " << report.oversized
-      << "\nBoundary search truncated: " << report.boundary_search_truncated
+      << "\nInput search truncated: " << report.input_search_truncated
       << "\nCandidate profiles skipped at cap: "
       << report.candidate_profiles_skipped
       << "\nExtraction limited: " << report.extraction_limited
@@ -112,13 +112,13 @@ std::string formatReport(const RegionSummary& report) {
 std::string formatReport(const PairSummary& report) {
   std::ostringstream out;
   out << "\nComposition " << report.a_region << " -> " << report.b_region
-      << " (" << (report.frontier_resolved ? "frontier-resolved" : "exact")
-      << ")\n"
+      << "\n"
       << "Pairs evaluated: " << report.evaluations
       << "; truncated: " << report.truncated
       << "; shared layout rejections: " << report.shared_layout_rejections
       << "; unknown cost rejections: " << report.unknown_cost_rejections << "\n"
-      << "External boundary winners: " << report.plans.size() << "\n"
+      << "External boundary contracts: " << report.plans.size() << "\n"
+      << "Surviving implementations: " << report.frontier.size() << "\n"
       << "Layouts: R=replicated, axis:dN=axis shards tensor dimension N. Costs "
          "in us.\n";
   for (size_t i = 0; i < report.interface.external.inputs.size(); ++i) {
@@ -146,7 +146,7 @@ std::string formatReport(const PairSummary& report) {
       << " maps A output 0 -> B input " << report.interface.intermediate_input
       << "\n";
   out << std::setprecision(12);
-  for (size_t i = 0; i < report.plans.size(); ++i) {
+  for (auto i : report.frontier) {
     const auto& p = report.plans[i];
     out << "Selected " << i << ": inputs=[";
     for (size_t j = 0; j < p.boundary.inputs.size(); ++j)
@@ -167,6 +167,10 @@ std::string formatReport(const PairSummary& report) {
         << ") total=" << p.cost.total() << " compute=" << p.cost.compute
         << " comm=" << p.cost.communication << "\n";
   }
+  for (const auto& witness : report.dominance)
+    out << "Pruned pair P" << witness.removed_id << " via P"
+        << witness.replacement_id << " adapters_us=" << witness.adapters.total()
+        << " replacement_total_us=" << witness.replacement_total << "\n";
   return out.str();
 }
 std::string formatReport(const OptimizationReport& report) {
@@ -189,81 +193,43 @@ std::string formatReport(const OptimizationReport& report) {
 }
 namespace {
 template <typename Experiment>
-std::string functionComparison(const Experiment& report, const char* kind) {
+std::string functionReport(const Experiment& report, const char* kind) {
   std::ostringstream out;
-  out << std::setprecision(12);
-  out << "\nComplete " << kind << " selection ("
-      << (report.select_resolved ? "resolved" : "exact") << ")\n"
+  const auto& selected = report.selected();
+  out << std::setprecision(12) << "\nComplete " << kind
+      << " selection with dominance pruning\n"
       << "Fixed external contract: " << report.contract.key() << "\n"
       << "Numerical rewrite policy: " << report.numerical_policy << "\n"
       << "Region preparation/evaluation/pruning time(us): "
       << report.evaluation_us << "\n"
-      << "Boundary truncated: " << report.boundary_truncated
+      << "Input truncated: " << report.input_truncated
       << "; candidate profiles skipped at cap: " << report.candidate_cap_reached
       << "; saturation limited: " << report.saturation_limited
       << "; extraction limited: " << report.extraction_limited << "\n"
       << "Extraction states: " << report.extraction_states
       << "; extraction search(us): " << report.extraction_us << "\n"
-      << "Mode | Compute(us) | Communication(us) | Total(us) | Search(us) | "
-         "States | Transitions | Truncated\n";
-  auto row = [&](const char* name, const auto& result) {
-    out << name << " | ";
-    if (result.feasible)
-      out << result.cost.compute << " | " << result.cost.communication << " | "
-          << result.cost.total();
-    else
-      out << "infeasible | infeasible | " << result.failure;
-    out << " | " << result.search_us << " | " << result.states_retained << " | "
-        << result.transitions << " | " << result.truncated << "\n";
-  };
-  row("original + DP", report.original);
-  row("joint greedy", report.greedy);
-  row("joint exact DP", report.exact);
-  row("joint resolved DP", report.resolved);
-  const auto& selected = report.selected();
-  out << "Selected total(us): " << selected.cost.total() << "\n";
-  if (report.original.feasible)
-    out << "Savings versus original(us): "
-        << report.original.cost.total() - selected.cost.total() << "\n";
-  if (report.greedy.feasible)
-    out << "Savings versus greedy(us): "
-        << report.greedy.cost.total() - selected.cost.total() << "\n";
-  if (selected.truncated)
-    out << "Selection is the lowest-cost complete plan found by capped search; "
-           "the sampled-table minimum is not guaranteed.\n";
-  else
-    out << "Selection minimizes additive region and adapter costs among "
-           "evaluated choices under the fixed contract.\n";
-  out << "Search is relative to sampled candidates/layouts; caps and "
-         "saturation limits above restrict that set.\n";
-  out << "Contract rejections: " << selected.contract_rejections
+      << "Selected compute(us): " << selected.cost.compute
+      << "; communication(us): " << selected.cost.communication
+      << "; total(us): " << selected.cost.total() << "\n"
+      << "Search(us): " << selected.search_us
+      << "; states: " << selected.states_retained
+      << "; transitions: " << selected.transitions
+      << "; dominated prefixes: " << selected.dominance_pruned
+      << "; truncated: " << selected.truncated << "\n"
+      << "Contract rejections: " << selected.contract_rejections
       << "; unknown-cost rejections: " << selected.unknown_cost_rejections
       << "\n";
+  out << "Selection uses sampled rewrites and input assignments with inferred "
+         "outputs. "
+         "Search caps may limit the selected plan.\n";
   return out.str();
 }
 }  // namespace
-std::string formatComparison(const ChainExperiment& report) {
-  return functionComparison(report, "chain");
-}
-std::string formatComparison(const DagExperiment& report) {
-  std::ostringstream out;
-  out << functionComparison(report, "DAG");
-  out << "Model: fixed source region order, one persistent layout per live "
-         "value, consumer-local adapters.\n"
-      << "Peak live values: " << report.selected().peak_live_values << "\n";
-  auto discarded = [&](const char* name, const DagResult& result) {
-    out << name << " discarded states: " << result.states_discarded << "\n";
-  };
-  discarded("original + DP", report.original);
-  discarded("joint greedy", report.greedy);
-  discarded("joint exact DP", report.exact);
-  discarded("joint resolved DP", report.resolved);
-  return out.str();
-}
 std::string formatReport(const DagExperiment& report) {
   std::ostringstream out;
-  out << std::setprecision(12) << formatComparison(report);
+  out << std::setprecision(12) << functionReport(report, "DAG");
   const auto& result = report.selected();
+  out << "Peak live values: " << result.peak_live_values << "\n";
   for (size_t i = 0; i < result.steps.size(); ++i) {
     const auto& step = result.steps[i];
     out << "Region " << i << ": requested P" << step.selected.requested
@@ -294,6 +260,8 @@ std::string formatReport(const DagExperiment& report) {
       wrapper("input wrapper", j, step.selected.input_adapters[j]);
     for (size_t j = 0; j < step.selected.output_adapters.size(); ++j)
       wrapper("output wrapper", j, step.selected.output_adapters[j]);
+    for (size_t j = 0; j < step.outgoing.size(); ++j)
+      wrapper("prefix output adapter", j, step.outgoing[j]);
     out << "  Live after region: ";
     for (size_t j = 0; j < step.live_layouts.size(); ++j)
       out << "V" << report.interface.live_after[i][j].value << "="
@@ -308,7 +276,7 @@ std::string formatReport(const DagExperiment& report) {
 }
 std::string formatReport(const ChainExperiment& report) {
   std::ostringstream out;
-  out << std::setprecision(12) << formatComparison(report);
+  out << std::setprecision(12) << functionReport(report, "chain");
   const auto& selected = report.selected();
   for (size_t i = 0; i < selected.steps.size(); ++i) {
     const auto& step = selected.steps[i];
@@ -329,6 +297,8 @@ std::string formatReport(const ChainExperiment& report) {
       adapter("input wrapper", j, step.selected.input_adapters[j]);
     for (size_t j = 0; j < step.selected.output_adapters.size(); ++j)
       adapter("output wrapper", j, step.selected.output_adapters[j]);
+    for (size_t j = 0; j < step.outgoing.size(); ++j)
+      adapter("prefix output adapter", j, step.outgoing[j]);
   }
   out << "Emitted MLIR verifies types, exact layouts and recomputed cost; "
          "numerical checks are fixture tests and are not run on this input.\n";

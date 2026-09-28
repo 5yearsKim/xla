@@ -12,6 +12,7 @@ struct EvaluationResult {
   Cost cost;
   std::string failure;
   std::string lowered_mlir;
+  BoundaryState boundary;
 };
 struct ReshardPlan {
   bool feasible = false;

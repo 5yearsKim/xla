@@ -13,16 +13,18 @@ namespace joint_shard {
 struct Region;
 struct Candidate;
 
-// Prepared modules are unannotated and never mutated during evaluation.
+// Prepared modules preserve required output constraints and are cloned for
+// evaluation.
 mlir::OwningOpRef<mlir::ModuleOp> prepareCandidateModule(
-    const Region& region, const Candidate& candidate, const MeshContext& mesh);
+    const Region& region, const Candidate& candidate, const MeshContext& mesh,
+    const std::map<void*, TensorSharding>& fixed_outputs = {});
 
 class RegionEvaluator {
  public:
   RegionEvaluator(MeshContext mesh, CostModel model = CostModel{})
       : mesh_(std::move(mesh)), model_(model) {}
   EvaluationResult evaluate(mlir::ModuleOp prepared,
-                            const BoundaryState& boundary,
+                            llvm::ArrayRef<TensorSharding> inputs,
                             const ShardyRunOptions& options = {}) const;
 
  private:

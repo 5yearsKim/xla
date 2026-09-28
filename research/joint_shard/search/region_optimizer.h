@@ -26,21 +26,17 @@ struct RegionOptimizerOptions {
   CostModelOptions cost;
   std::optional<std::pair<size_t, size_t>> compose_regions;
   size_t max_pair_evaluations = 65536;
-  bool compose_pruned = false;
   bool optimize_chain = false;
-  bool chain_resolved = false;
   size_t max_chain_transitions = 65536;
   bool optimize_dag = false;
   DagSearchOptions dag;
   size_t max_candidates = 32;
-  size_t max_boundary_states = 256;
+  size_t max_input_states = 256;
   std::string mesh_name;
 };
 struct OptimizationReport {
   MeshContext mesh;
   std::vector<RegionSummary> regions;
-  // Original-only implementations retained for function baseline references.
-  std::vector<RegionSummary> original_regions;
   std::vector<PairSummary> compositions;
   std::optional<ChainExperiment> chain;
   std::optional<DagExperiment> dag;

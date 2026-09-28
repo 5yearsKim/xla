@@ -42,58 +42,77 @@ void RegionSummary::finalizePlans() {
   dominance.clear();
   for (size_t i = 0; i < plans.size(); ++i) {
     plans[i].id = i;
+    plans[i].replacement.reset();
     frontier.push_back(i);
   }
 }
 
-void pruneDominatedStates(RegionSummary& summary,
-                          const ReshardEstimator& estimate) {
-  for (const auto& plan : summary.plans)
-    if (plan.boundary.inputs.size() != summary.interface.inputs.size() ||
-        plan.boundary.outputs.size() != summary.interface.outputs.size())
+BoundaryPruning pruneBoundaryPlans(const RegionInterface& interface,
+                                   llvm::ArrayRef<BoundaryState> boundaries,
+                                   llvm::ArrayRef<Cost> costs,
+                                   const ReshardEstimator& estimate) {
+  if (boundaries.size() != costs.size())
+    throw std::invalid_argument("boundary/cost arity mismatch");
+  BoundaryPruning result;
+  for (size_t i = 0; i < boundaries.size(); ++i) {
+    if (boundaries[i].inputs.size() != interface.inputs.size() ||
+        boundaries[i].outputs.size() != interface.outputs.size())
       throw std::invalid_argument("summary interface/type arity mismatch");
-  summary.frontier.clear();
-  for (size_t i = 0; i < summary.plans.size(); ++i)
-    summary.frontier.push_back(i);
+    result.frontier.push_back(i);
+  }
   std::stable_sort(
-      summary.frontier.begin(), summary.frontier.end(),
-      [&](PlanId l, PlanId r) {
-        const auto& left = summary.plans.at(l);
-        const auto& right = summary.plans.at(r);
-        if (left.cost.known() != right.cost.known()) return left.cost.known();
-        if (left.cost.known() && left.cost.total() != right.cost.total())
-          return left.cost.total() < right.cost.total();
-        return left.boundary.key() < right.boundary.key();
+      result.frontier.begin(), result.frontier.end(), [&](PlanId l, PlanId r) {
+        if (costs[l].known() != costs[r].known()) return costs[l].known();
+        if (costs[l].known() && costs[l].total() != costs[r].total())
+          return costs[l].total() < costs[r].total();
+        return boundaries[l].key() < boundaries[r].key();
       });
-  summary.dominance.clear();
   std::vector<PlanId> retained;
-  for (auto id : summary.frontier) {
-    const auto& plan = summary.plans.at(id);
+  for (auto id : result.frontier) {
     bool dominated = false;
-    if (plan.cost.known())
-      for (auto alternative_id : retained) {
-        const auto& alternative = summary.plans.at(alternative_id);
-        if (!alternative.cost.known()) continue;
+    if (costs[id].known())
+      for (auto alternative : retained) {
+        if (!costs[alternative].known()) continue;
         Cost adapters;
-        for (size_t i = 0; i < summary.interface.inputs.size(); ++i)
+        for (size_t i = 0; i < interface.inputs.size(); ++i)
+          adapters += estimate(boundaries[id].inputs[i],
+                               boundaries[alternative].inputs[i],
+                               interface.inputs[i].type);
+        for (size_t i = 0; i < interface.outputs.size(); ++i)
           adapters +=
-              estimate(plan.boundary.inputs[i], alternative.boundary.inputs[i],
-                       summary.interface.inputs[i].type);
-        for (size_t i = 0; i < summary.interface.outputs.size(); ++i)
-          adapters += estimate(alternative.boundary.outputs[i],
-                               plan.boundary.outputs[i],
-                               summary.interface.outputs[i].type);
-        double total = alternative.cost.total() + adapters.total();
-        if (adapters.known() && total <= plan.cost.total()) {
-          summary.dominance.push_back({plan.boundary, alternative.boundary,
-                                       adapters, total, id, alternative_id});
+              estimate(boundaries[alternative].outputs[i],
+                       boundaries[id].outputs[i], interface.outputs[i].type);
+        double total = costs[alternative].total() + adapters.total();
+        if (adapters.known() && total <= costs[id].total()) {
+          result.dominance.push_back({boundaries[id], boundaries[alternative],
+                                      adapters, total, id, alternative});
           dominated = true;
           break;
         }
       }
     if (!dominated) retained.push_back(id);
   }
-  summary.frontier = std::move(retained);
+  result.frontier = std::move(retained);
+  return result;
+}
+
+void pruneDominatedStates(RegionSummary& summary,
+                          const ReshardEstimator& estimate) {
+  std::vector<BoundaryState> boundaries;
+  std::vector<Cost> costs;
+  for (const auto& plan : summary.plans) {
+    boundaries.push_back(plan.boundary);
+    costs.push_back(plan.cost);
+  }
+  auto pruned =
+      pruneBoundaryPlans(summary.interface, boundaries, costs, estimate);
+  summary.frontier = std::move(pruned.frontier);
+  summary.dominance = std::move(pruned.dominance);
+  for (const auto& witness : summary.dominance) {
+    auto& plan = summary.plans[witness.removed_id];
+    plan.replacement = witness.replacement_id;
+    std::string{}.swap(plan.lowered_mlir);
+  }
 }
 
 }  // namespace joint_shard

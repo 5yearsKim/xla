@@ -18,9 +18,20 @@ bool sameMesh(mlir::sdy::TensorShardingAttr sharding, const MeshContext& mesh) {
     return ref.getValue() == mesh.name;
   return sharding.getMeshOrRef() == mesh.mesh;
 }
-bool compatible(mlir::sdy::TensorShardingAttr layout,
-                mlir::sdy::TensorShardingAttr constraint,
-                const MeshContext& mesh) {
+mlir::sdy::TensorShardingAttr closeSharding(
+    mlir::sdy::TensorShardingAttr source, const MeshContext& mesh) {
+  std::vector<mlir::sdy::DimensionShardingAttr> dimensions;
+  for (auto dim : source.getDimShardings())
+    dimensions.push_back(mlir::sdy::DimensionShardingAttr::get(
+        source.getContext(), dim.getAxes(), true));
+  return mlir::sdy::TensorShardingAttr::get(source.getContext(), mesh.name,
+                                            dimensions, {}, {});
+}
+}  // namespace
+
+bool compatibleSharding(mlir::sdy::TensorShardingAttr layout,
+                        mlir::sdy::TensorShardingAttr constraint,
+                        const MeshContext& mesh) {
   if (!sameMesh(constraint, mesh) || constraint.getRank() != layout.getRank() ||
       !constraint.getUnreducedAxes().empty())
     return false;
@@ -39,16 +50,6 @@ bool compatible(mlir::sdy::TensorShardingAttr layout,
   }
   return true;
 }
-mlir::sdy::TensorShardingAttr closeSharding(
-    mlir::sdy::TensorShardingAttr source, const MeshContext& mesh) {
-  std::vector<mlir::sdy::DimensionShardingAttr> dimensions;
-  for (auto dim : source.getDimShardings())
-    dimensions.push_back(mlir::sdy::DimensionShardingAttr::get(
-        source.getContext(), dim.getAxes(), true));
-  return mlir::sdy::TensorShardingAttr::get(source.getContext(), mesh.name,
-                                            dimensions, {}, {});
-}
-}  // namespace
 
 MeshContext selectMesh(mlir::ModuleOp module, std::string name) {
   module.getContext()->getOrLoadDialect<mlir::sdy::SdyDialect>();
@@ -146,7 +147,7 @@ std::vector<TensorSharding> tensorLayoutChoices(
   auto append = [&](TensorSharding layout) {
     if (!validExactSharding(layout, type, mesh)) return;
     for (auto constraint : constraints)
-      if (!compatible(layout.attr, constraint, mesh)) return;
+      if (!compatibleSharding(layout.attr, constraint, mesh)) return;
     if (std::find(choices.begin(), choices.end(), layout) == choices.end())
       choices.push_back(layout);
   };
@@ -175,56 +176,61 @@ std::vector<TensorSharding> tensorLayoutChoices(
   return choices;
 }
 
-BoundaryEnumeration enumerateBoundaryStates(
-    const Region& region, const MeshContext& mesh, const LayoutPolicy& policy,
-    size_t max_states, const std::map<void*, TensorSharding>& fixed_inputs,
+std::vector<std::vector<mlir::sdy::TensorShardingAttr>> outputConstraints(
+    const Region& region,
     const std::map<void*, TensorSharding>& fixed_outputs) {
-  if (!max_states) throw std::invalid_argument("boundary cap must be positive");
-  std::vector<std::vector<TensorSharding>> ports;
-  auto choices = [&](mlir::Value value, size_t index, bool input) {
+  std::vector<std::vector<mlir::sdy::TensorShardingAttr>> result;
+  for (auto value : region.outputs) {
     std::vector<mlir::sdy::TensorShardingAttr> constraints;
+    if (auto fixed = fixed_outputs.find(value.getAsOpaquePointer());
+        fixed != fixed_outputs.end())
+      constraints.push_back(fixed->second.attr);
     if (auto attr = mlir::sdy::getSharding(value)) constraints.push_back(attr);
-    if (!input) {
-      for (auto& use : value.getUses()) {
-        if (auto ret = llvm::dyn_cast<mlir::func::ReturnOp>(use.getOwner())) {
-          auto function = ret->getParentOfType<mlir::func::FuncOp>();
-          if (auto attr =
-                  function.getResultAttrOfType<mlir::sdy::TensorShardingAttr>(
-                      use.getOperandNumber(), "sdy.sharding"))
-            constraints.push_back(attr);
-        } else if (auto constraint =
-                       llvm::dyn_cast<mlir::sdy::ShardingConstraintOp>(
-                           use.getOwner())) {
-          // Dangling constraints apply to the source value itself. Used
-          // constraints apply only to their result uses and remain boundaries.
-          if (constraint->use_empty())
-            constraints.push_back(constraint.getSharding());
-        }
+    for (auto& use : value.getUses()) {
+      if (auto ret = llvm::dyn_cast<mlir::func::ReturnOp>(use.getOwner())) {
+        auto function = ret->getParentOfType<mlir::func::FuncOp>();
+        if (auto attr =
+                function.getResultAttrOfType<mlir::sdy::TensorShardingAttr>(
+                    use.getOperandNumber(), "sdy.sharding"))
+          constraints.push_back(attr);
+      } else if (auto constraint =
+                     llvm::dyn_cast<mlir::sdy::ShardingConstraintOp>(
+                         use.getOwner())) {
+        if (constraint->use_empty())
+          constraints.push_back(constraint.getSharding());
       }
     }
-    const auto& overrides = input ? policy.inputs : policy.outputs;
-    auto found = overrides.find(index);
-    const auto& fixed = input ? fixed_inputs : fixed_outputs;
-    if (auto exact = fixed.find(value.getAsOpaquePointer());
-        exact != fixed.end()) {
+    result.push_back(std::move(constraints));
+  }
+  return result;
+}
+
+InputEnumeration enumerateInputStates(
+    const Region& region, const MeshContext& mesh, const LayoutPolicy& policy,
+    size_t max_states, const std::map<void*, TensorSharding>& fixed_inputs) {
+  if (!max_states)
+    throw std::invalid_argument("input state cap must be positive");
+  std::vector<std::vector<TensorSharding>> ports;
+  for (size_t i = 0; i < region.inputs.size(); ++i) {
+    auto value = region.inputs[i];
+    std::vector<mlir::sdy::TensorShardingAttr> constraints;
+    if (auto attr = mlir::sdy::getSharding(value)) constraints.push_back(attr);
+    if (auto exact = fixed_inputs.find(value.getAsOpaquePointer());
+        exact != fixed_inputs.end()) {
       for (auto constraint : constraints)
-        if (!compatible(exact->second.attr, constraint, mesh))
+        if (!compatibleSharding(exact->second.attr, constraint, mesh))
           throw std::invalid_argument(
               "function contract conflicts with region constraint");
-      return std::vector<TensorSharding>{exact->second};
+      ports.push_back({exact->second});
+    } else {
+      auto found = policy.inputs.find(i);
+      ports.push_back(tensorLayoutChoices(
+          llvm::cast<mlir::RankedTensorType>(value.getType()), mesh, policy,
+          found == policy.inputs.end() ? policy.defaults : found->second,
+          constraints));
     }
-    return tensorLayoutChoices(
-        llvm::cast<mlir::RankedTensorType>(value.getType()), mesh, policy,
-        found == overrides.end() ? policy.defaults : found->second,
-        constraints);
-  };
-  for (size_t i = 0; i < region.inputs.size(); ++i)
-    ports.push_back(choices(region.inputs[i], i, true));
-  for (size_t i = 0; i < region.outputs.size(); ++i)
-    ports.push_back(choices(region.outputs[i], i, false));
-  BoundaryEnumeration result;
-  // An impossible port must not cause exhaustive traversal of all preceding
-  // combinations merely to discover that no complete state exists.
+  }
+  InputEnumeration result;
   if (llvm::any_of(ports, [](const auto& choices) { return choices.empty(); }))
     return result;
   std::vector<TensorSharding> selected;
@@ -235,12 +241,7 @@ BoundaryEnumeration enumerateBoundaryStates(
         result.truncated = true;
         return;
       }
-      BoundaryState state;
-      state.inputs.assign(selected.begin(),
-                          selected.begin() + region.inputs.size());
-      state.outputs.assign(selected.begin() + region.inputs.size(),
-                           selected.end());
-      result.states.push_back(std::move(state));
+      result.states.push_back(selected);
       return;
     }
     for (auto layout : ports[port]) {
@@ -266,7 +267,7 @@ BoundaryState functionLayoutContract(mlir::func::FuncOp function,
         annotation ? TensorSharding{closeSharding(annotation, mesh)}
                    : replicatedSharding(tensor, mesh);
     if (!validExactSharding(layout, tensor, mesh) ||
-        (annotation && !compatible(layout.attr, annotation, mesh)))
+        (annotation && !compatibleSharding(layout.attr, annotation, mesh)))
       throw std::invalid_argument(
           "no compatible exact function layout contract");
     return layout;

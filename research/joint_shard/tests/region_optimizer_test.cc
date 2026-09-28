@@ -17,16 +17,20 @@ TEST_F(RegionOptimizerTest, EndToEndBuildsFrontierWithoutMutatingSource) {
   ASSERT_EQ(report.regions.size(), 1);
   auto& summary = report.regions[0];
   EXPECT_GE(summary.candidates.size(), 2);
-  EXPECT_EQ(summary.boundaries_evaluated, 27);
-  EXPECT_EQ(summary.evaluations, 27 * summary.candidates.size());
-  EXPECT_EQ(summary.best_boundary_plans, 27);
+  EXPECT_EQ(summary.input_states_evaluated, 9);
+  EXPECT_EQ(summary.evaluations, 9 * summary.candidates.size());
+  EXPECT_LE(summary.best_boundary_plans, summary.feasible_plans);
   EXPECT_EQ(summary.unknown_cost_plans, 0);
   EXPECT_FALSE(summary.plans.empty());
   EXPECT_LT(summary.frontier.size(), summary.best_boundary_plans);
   EXPECT_EQ(summary.plans.size(), summary.best_boundary_plans);
   for (const auto& plan : summary.plans) {
     EXPECT_TRUE(plan.cost.known());
-    EXPECT_NE(plan.lowered_mlir.find("func.func @main"), std::string::npos);
+    if (std::find(summary.frontier.begin(), summary.frontier.end(), plan.id) !=
+        summary.frontier.end())
+      EXPECT_NE(plan.lowered_mlir.find("func.func @main"), std::string::npos);
+    else
+      EXPECT_TRUE(plan.lowered_mlir.empty());
   }
   EXPECT_EQ(print(*module), before);
   EXPECT_NE(formatReport(report).find("After reshard dominance:"),
@@ -37,7 +41,7 @@ TEST_F(RegionOptimizerTest, ObserversReceiveCandidatesStagesAndFinalSummaries) {
   auto module = scalingDot();
   RegionOptimizerOptions options;
   options.max_candidates = 1;
-  options.max_boundary_states = 1;
+  options.max_input_states = 1;
   size_t candidates = 0, snapshots = 0, summaries = 0;
   OptimizationObserver observer;
   observer.candidate_prepared = [&](size_t region, size_t candidate,

@@ -240,7 +240,7 @@ profile candidates with ordered shared roots, evaluates each under exact boundar
 states on independent Shardy clones, and preserves exact boundary tables alongside a reshard-pruned region frontier.
 Optional `--compose-regions=A,B` searches adjacent region pairs and materializes
 verified child-plus-adapter modules for each external boundary.
-`--compose-pruned` adds executable wrappers for dominance-resolved child plans.
+Composition automatically adds executable adapters for dominance replacements.
 Driver options default to relaxed floating-point algebra. Low-level semantic
 APIs retain explicit strict/relaxed policies and all existing guards.
 

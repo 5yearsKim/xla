@@ -130,107 +130,48 @@ TEST_F(PairCompositionTest,
   EXPECT_THROW(buildPairInterface(regions[0], regions[1], values),
                std::invalid_argument);
 }
-TEST_F(PairCompositionTest, ExactAndResolvedArtifactsMatchExhaustiveCosts) {
+TEST_F(PairCompositionTest, InferredPairsAndReplacementRecipesMaterialize) {
   auto module = chain();
   auto before = print(*module);
   RegionOptimizerOptions options;
   options.compose_regions = {{0, 1}};
-  auto exact = summarizeRegions(*module, options);
-  ASSERT_EQ(exact.regions.size(), 2);
-  ASSERT_EQ(exact.compositions.size(), 1);
-  const auto& pair = exact.compositions[0];
-  EXPECT_EQ(pair.evaluations, 27 * 9);
+  auto report = summarizeRegions(*module, options);
+  ASSERT_EQ(report.regions.size(), 2);
+  ASSERT_EQ(report.compositions.size(), 1);
+  const auto& pair = report.compositions[0];
+  EXPECT_EQ(report.regions[0].input_states_evaluated, 9);
+  EXPECT_EQ(report.regions[1].input_states_evaluated, 3);
+  EXPECT_LE(pair.evaluations, 18 * 3);
   EXPECT_FALSE(pair.truncated);
-  ASSERT_EQ(pair.plans.size(), 27);
-  ReshardCostOracle oracle(exact.mesh);
-  std::map<std::string, double> reference;
-  for (const auto& ap : exact.regions[0].plans)
-    for (const auto& bp : exact.regions[1].plans) {
-      BoundaryState outer{ap.boundary.inputs, bp.boundary.outputs};
-      double total =
-          ap.cost.total() +
-          oracle
-              .estimate(ap.boundary.outputs[0], bp.boundary.inputs[0],
-                        pair.interface.intermediate.type)
-              .total() +
-          bp.cost.total();
-      auto [it, inserted] = reference.emplace(outer.key(), total);
-      if (!inserted) it->second = std::min(it->second, total);
-    }
-  for (const auto& plan : pair.plans) {
-    EXPECT_NEAR(plan.cost.total(), reference.at(plan.boundary.key()), 1e-9);
-    auto artifact = parse(plan.lowered_mlir);
-    auto cost = CostModel().estimate(*artifact, exact.mesh.mesh);
+  ASSERT_FALSE(pair.frontier.empty());
+  bool replaced = false;
+  for (size_t i = 0; i < pair.plans.size(); ++i) {
+    const auto& plan = pair.plans[i];
+    auto artifact = parse(materializePair(report.regions[0], report.regions[1],
+                                          pair, i, report.mesh, CostModel{}));
+    auto cost = CostModel().estimate(*artifact, report.mesh.mesh);
     EXPECT_NEAR(cost.compute, plan.cost.compute, 1e-9);
     EXPECT_NEAR(cost.communication, plan.cost.communication, 1e-9);
-    EXPECT_EQ(std::distance(artifact->getOps<mlir::sdy::MeshOp>().begin(),
-                            artifact->getOps<mlir::sdy::MeshOp>().end()),
-              1);
-  }
-  // Winners in this chain align h layouts. Force all nine native layout
-  // directions to independently exercise executable nonidentity adapters.
-  auto planner = [&](auto from, auto to, auto type) {
-    return oracle.plan(from, to, type);
-  };
-  const auto& a = exact.regions[0];
-  const auto& b = exact.regions[1];
-  size_t forced = 0;
-  for (const auto& ap : a.plans) {
-    bool replicated_inputs = true;
-    for (size_t i = 0; i < ap.boundary.inputs.size(); ++i)
-      replicated_inputs &=
-          ap.boundary.inputs[i] ==
-          replicatedSharding(
-              llvm::cast<mlir::RankedTensorType>(a.interface.inputs[i].type),
-              exact.mesh);
-    if (!replicated_inputs) continue;
-    for (const auto& bp : b.plans) {
-      if (bp.boundary.outputs[0] !=
-          replicatedSharding(
-              llvm::cast<mlir::RankedTensorType>(b.interface.outputs[0].type),
-              exact.mesh))
-        continue;
-      ComposedPlan plan;
-      plan.a = resolveRegionPlan(a, ap.id, false, planner);
-      plan.b = resolveRegionPlan(b, bp.id, false, planner);
-      plan.boundary = {ap.boundary.inputs, bp.boundary.outputs};
-      plan.intermediate =
-          oracle.plan(ap.boundary.outputs[0], bp.boundary.inputs[0],
-                      pair.interface.intermediate.type);
-      plan.cost = plan.a.cost;
-      plan.cost += plan.intermediate.cost;
-      plan.cost += plan.b.cost;
-      auto artifact = parse(
-          materializePair(a, b, pair.interface, plan, exact.mesh, CostModel{}));
-      EXPECT_NEAR(CostModel().estimate(*artifact, exact.mesh.mesh).total(),
-                  plan.cost.total(), 1e-9);
-      ++forced;
-    }
-  }
-  EXPECT_EQ(forced, 9);
-  auto tampered = pair.plans[0];
-  tampered.cost.compute += 1;
-  EXPECT_THROW(
-      materializePair(a, b, pair.interface, tampered, exact.mesh, CostModel{}),
-      std::runtime_error);
-  options.compose_pruned = true;
-  auto resolved = summarizeRegions(*module, options);
-  ASSERT_EQ(resolved.compositions[0].plans.size(), reference.size());
-  bool replaced = false;
-  for (const auto& plan : resolved.compositions[0].plans) {
-    EXPECT_LE(plan.cost.total(), reference.at(plan.boundary.key()) + 1e-9);
-    auto artifact = parse(plan.lowered_mlir);
-    auto cost = CostModel().estimate(*artifact, resolved.mesh.mesh);
-    EXPECT_NEAR(cost.total(), plan.cost.total(), 1e-9);
-    replaced |= plan.a.requested != plan.a.implementation ||
-                plan.b.requested != plan.b.implementation;
+    if (plan.replacement) {
+      replaced = true;
+      EXPECT_TRUE(plan.lowered_mlir.empty());
+      EXPECT_EQ(plan.a.input_adapters.size(), 0);
+    } else
+      EXPECT_FALSE(plan.lowered_mlir.empty());
   }
   EXPECT_TRUE(replaced);
-  for (const auto& region : resolved.regions)
-    for (const auto& witness : region.dominance)
+  auto tampered = pair;
+  tampered.plans[0].cost.compute += 1;
+  EXPECT_THROW(materializePair(report.regions[0], report.regions[1], tampered,
+                               0, report.mesh, CostModel{}),
+               std::runtime_error);
+  for (const auto& region : report.regions)
+    for (const auto& witness : region.dominance) {
+      EXPECT_TRUE(region.plans[witness.removed_id].lowered_mlir.empty());
       EXPECT_NE(std::find(region.frontier.begin(), region.frontier.end(),
                           witness.replacement_id),
                 region.frontier.end());
+    }
   EXPECT_EQ(print(*module), before);
 }
 TEST_F(PairCompositionTest, RealRewriteWinnerDependsOnBoundary) {
@@ -264,14 +205,11 @@ TEST_F(PairCompositionTest, RealRewriteWinnerDependsOnBoundary) {
   conflict.inputs[2] = tensorLayoutChoices(
       llvm::cast<mlir::RankedTensorType>(summary.interface.inputs[2].type),
       report.mesh, {}, {std::nullopt, 0})[1];
-  conflict.outputs[0] = tensorLayoutChoices(
-      llvm::cast<mlir::RankedTensorType>(summary.interface.outputs[0].type),
-      report.mesh, {}, {std::nullopt, 1})[1];
   RegionEvaluator evaluator(report.mesh);
-  auto original_r = evaluator.evaluate(*original, replicated),
-       factored_r = evaluator.evaluate(*factored, replicated);
-  auto original_conflict = evaluator.evaluate(*original, conflict),
-       factored_conflict = evaluator.evaluate(*factored, conflict);
+  auto original_r = evaluator.evaluate(*original, replicated.inputs),
+       factored_r = evaluator.evaluate(*factored, replicated.inputs);
+  auto original_conflict = evaluator.evaluate(*original, conflict.inputs),
+       factored_conflict = evaluator.evaluate(*factored, conflict.inputs);
   ASSERT_TRUE(original_r.feasible && factored_r.feasible &&
               original_conflict.feasible && factored_conflict.feasible);
   EXPECT_LT(factored_r.cost.total(), original_r.cost.total());
@@ -280,20 +218,21 @@ TEST_F(PairCompositionTest, RealRewriteWinnerDependsOnBoundary) {
             original_conflict.cost.communication);
   bool checked_r = false, checked_conflict = false;
   for (const auto& plan : summary.plans) {
-    if (plan.boundary == replicated) {
+    if (plan.boundary == factored_r.boundary) {
       EXPECT_EQ(plan.candidate_id, 1);
       checked_r = true;
     }
-    if (plan.boundary == conflict) {
+    if (plan.boundary == original_conflict.boundary) {
       EXPECT_EQ(plan.candidate_id, 0);
       checked_conflict = true;
     }
   }
   EXPECT_TRUE(checked_r && checked_conflict);
-  for (const auto& pair : report.compositions[0].plans) {
-    auto artifact = parse(pair.lowered_mlir);
+  const auto& pair = report.compositions[0];
+  for (auto i : pair.frontier) {
+    auto artifact = parse(pair.plans[i].lowered_mlir);
     EXPECT_NEAR(CostModel().estimate(*artifact, report.mesh.mesh).total(),
-                pair.cost.total(), 1e-9);
+                pair.plans[i].cost.total(), 1e-9);
   }
 }
 TEST_F(PairCompositionTest, AdditionalInputsAndMultipleOutputsMaterialize) {
@@ -314,9 +253,11 @@ TEST_F(PairCompositionTest, AdditionalInputsAndMultipleOutputsMaterialize) {
   ASSERT_EQ(pair.interface.external.inputs.size(), 3);
   ASSERT_EQ(pair.interface.external.outputs.size(), 2);
   EXPECT_EQ(pair.interface.b_inputs, (std::vector<int64_t>{-1, 2}));
-  ASSERT_EQ(pair.plans.size(), 243);
-  for (const auto& plan : pair.plans) {
-    auto module = parse(plan.lowered_mlir);
+  ASSERT_FALSE(pair.plans.empty());
+  EXPECT_LT(pair.plans.size(), 243);
+  for (size_t i = 0; i < pair.plans.size(); ++i) {
+    auto module = parse(materializePair(report.regions[0], report.regions[1],
+                                        pair, i, report.mesh, CostModel{}));
     auto fn = module->lookupSymbol<mlir::func::FuncOp>("main");
     EXPECT_EQ(fn.getNumArguments(), 3);
     EXPECT_EQ(fn.getNumResults(), 2);

@@ -9,8 +9,7 @@ namespace joint_shard {
 
 PairSummary composePair(const RegionSummary& a, const RegionSummary& b,
                         const PairInterface& interface,
-                        const ReshardPlanner& oracle, size_t cap,
-                        bool use_frontier) {
+                        const ReshardPlanner& oracle, size_t cap) {
   if (!cap) throw std::invalid_argument("pair evaluation cap must be positive");
   if (a.interface.outputs.size() != 1 ||
       interface.a_inputs.size() != a.interface.inputs.size() ||
@@ -49,12 +48,11 @@ PairSummary composePair(const RegionSummary& a, const RegionSummary& b,
   result.a_region = a.id;
   result.b_region = b.id;
   result.interface = interface;
-  result.frontier_resolved = use_frontier;
   std::vector<ResolvedRegionPlan> left, right;
   for (size_t i = 0; i < a.plans.size(); ++i)
-    left.push_back(resolveRegionPlan(a, i, use_frontier, oracle));
+    left.push_back(resolveRegionPlan(a, i, oracle));
   for (size_t i = 0; i < b.plans.size(); ++i)
-    right.push_back(resolveRegionPlan(b, i, use_frontier, oracle));
+    right.push_back(resolveRegionPlan(b, i, oracle));
   std::map<std::string, ComposedPlan> best;
   for (const auto& ap : left) {
     for (const auto& bp : right) {
@@ -109,19 +107,66 @@ PairSummary composePair(const RegionSummary& a, const RegionSummary& b,
     if (result.truncated) break;
   }
   for (auto& [key, plan] : best) result.plans.push_back(std::move(plan));
+  std::vector<BoundaryState> boundaries;
+  std::vector<Cost> costs;
+  for (const auto& plan : result.plans) {
+    boundaries.push_back(plan.boundary);
+    costs.push_back(plan.cost);
+  }
+  auto pruned = pruneBoundaryPlans(interface.external, boundaries, costs,
+                                   [&](auto from, auto to, auto type) {
+                                     auto adapter = oracle(from, to, type);
+                                     return adapter.feasible ? adapter.cost
+                                                             : Cost{0, 0, 1};
+                                   });
+  result.frontier = std::move(pruned.frontier);
+  result.dominance = std::move(pruned.dominance);
+  for (const auto& witness : result.dominance) {
+    auto& plan = result.plans[witness.removed_id];
+    const auto& core = result.plans[witness.replacement_id];
+    plan.replacement = witness.replacement_id;
+    plan.cost = core.cost;
+    for (size_t i = 0; i < interface.external.inputs.size(); ++i) {
+      auto adapter = oracle(plan.boundary.inputs[i], core.boundary.inputs[i],
+                            interface.external.inputs[i].type);
+      plan.cost += adapter.cost;
+      plan.input_adapters.push_back(std::move(adapter));
+    }
+    for (size_t i = 0; i < interface.external.outputs.size(); ++i) {
+      auto adapter = oracle(core.boundary.outputs[i], plan.boundary.outputs[i],
+                            interface.external.outputs[i].type);
+      plan.cost += adapter.cost;
+      plan.output_adapters.push_back(std::move(adapter));
+    }
+    plan.a = {};
+    plan.b = {};
+    plan.intermediate = {};
+  }
   return result;
 }
 std::string materializePair(const RegionSummary& a, const RegionSummary& b,
-                            const PairInterface& interface,
-                            const ComposedPlan& plan, const MeshContext& mesh,
-                            const CostModel& model) {
+                            const PairSummary& pair, PlanId requested,
+                            const MeshContext& mesh, const CostModel& model) {
+  const auto& plan = pair.plans.at(requested);
+  const auto& core = plan.replacement ? pair.plans.at(*plan.replacement) : plan;
   ExecutionPlan execution;
-  std::vector<ExecutionPlanId> children{execution.resolved(0, a, plan.a)};
-  if (plan.intermediate.from != plan.intermediate.to)
-    children.push_back(
-        execution.adapter(interface.intermediate, plan.intermediate));
-  children.push_back(execution.resolved(1, b, plan.b));
-  execution.root = execution.composite(interface.external, plan.boundary,
+  std::vector<ExecutionPlanId> children;
+  for (size_t i = 0; i < plan.input_adapters.size(); ++i)
+    if (plan.input_adapters[i].from != plan.input_adapters[i].to)
+      children.push_back(execution.adapter(pair.interface.external.inputs[i],
+                                           plan.input_adapters[i]));
+  std::vector<ExecutionPlanId> local{execution.resolved(0, a, core.a)};
+  if (core.intermediate.from != core.intermediate.to)
+    local.push_back(
+        execution.adapter(pair.interface.intermediate, core.intermediate));
+  local.push_back(execution.resolved(1, b, core.b));
+  children.push_back(execution.composite(pair.interface.external, core.boundary,
+                                         std::move(local)));
+  for (size_t i = 0; i < plan.output_adapters.size(); ++i)
+    if (plan.output_adapters[i].from != plan.output_adapters[i].to)
+      children.push_back(execution.adapter(pair.interface.external.outputs[i],
+                                           plan.output_adapters[i]));
+  execution.root = execution.composite(pair.interface.external, plan.boundary,
                                        std::move(children));
   const auto& cost = execution.nodes.at(execution.root).cost;
   if (std::abs(cost.compute - plan.cost.compute) > 1e-9 ||

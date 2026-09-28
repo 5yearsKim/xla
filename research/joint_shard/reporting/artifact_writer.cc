@@ -63,9 +63,6 @@ OptimizationObserver ArtifactWriter::observer() const {
   result.region_completed = [this](const RegionSummary& region) {
     const auto directory = "region_" + std::to_string(region.id) + "/";
     writeText(directory + "summary.txt", formatReport(region));
-    for (const auto& plan : region.plans)
-      writeText(directory + "exact_P" + std::to_string(plan.id) + ".mlir",
-                plan.lowered_mlir);
     for (size_t i = 0; i < region.frontier.size(); ++i)
       writeText(directory + "frontier_" + std::to_string(i) + ".mlir",
                 region.plans.at(region.frontier[i]).lowered_mlir);
@@ -74,7 +71,7 @@ OptimizationObserver ArtifactWriter::observer() const {
     const auto directory = "pair_" + std::to_string(pair.a_region) + "_" +
                            std::to_string(pair.b_region) + "/";
     writeText(directory + "summary.txt", formatReport(pair));
-    for (size_t i = 0; i < pair.plans.size(); ++i) {
+    for (auto i : pair.frontier) {
       const auto prefix = directory + "selected_" + std::to_string(i);
       writeText(prefix + ".mlir", pair.plans[i].lowered_mlir);
       const auto& adapter = pair.plans[i].intermediate.lowered_mlir;
@@ -87,12 +84,10 @@ OptimizationObserver ArtifactWriter::observer() const {
   result.chain_completed = [this](const ChainExperiment& chain) {
     writeText("selected.mlir", chain.selected().lowered_mlir);
     writeText("selected_plan.txt", formatReport(chain));
-    writeText("comparison.txt", formatComparison(chain));
   };
   result.dag_completed = [this](const DagExperiment& dag) {
     writeText("selected.mlir", dag.selected().lowered_mlir);
     writeText("selected_plan.txt", formatReport(dag));
-    writeText("comparison.txt", formatComparison(dag));
   };
   return result;
 }

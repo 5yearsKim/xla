@@ -24,19 +24,11 @@ mlir::OwningOpRef<mlir::ModuleOp> createWrapper(
   function.addEntryBlock();
   return module;
 }
-bool matchesBoundary(mlir::func::FuncOp function, const BoundaryState& state) {
-  for (size_t i = 0; i < state.inputs.size(); ++i)
-    if (function.getArgAttr(i, "sdy.sharding") != state.inputs[i].attr)
-      return false;
-  for (size_t i = 0; i < state.outputs.size(); ++i)
-    if (function.getResultAttr(i, "sdy.sharding") != state.outputs[i].attr)
-      return false;
-  return true;
-}
 }  // namespace
 
 mlir::OwningOpRef<mlir::ModuleOp> prepareCandidateModule(
-    const Region& region, const Candidate& candidate, const MeshContext& mesh) {
+    const Region& region, const Candidate& candidate, const MeshContext& mesh,
+    const std::map<void*, TensorSharding>& fixed_outputs) {
   if (region.operations.empty()) throw std::invalid_argument("empty region");
   if (candidate.output_roots.size() != region.outputs.size())
     throw std::invalid_argument("candidate output arity mismatch");
@@ -53,6 +45,14 @@ mlir::OwningOpRef<mlir::ModuleOp> prepareCandidateModule(
   StableHloExporter exporter(builder, location, std::move(arguments));
   auto values =
       exporter.exportRoots(candidate.expression, candidate.output_roots);
+  auto constraints = outputConstraints(region, fixed_outputs);
+  for (size_t i = 0; i < constraints.size(); ++i) {
+    if (!constraints[i].empty())
+      function.setResultAttr(i, "sdy.sharding", constraints[i].front());
+    for (size_t j = 1; j < constraints[i].size(); ++j)
+      builder.create<mlir::sdy::ShardingConstraintOp>(location, values[i],
+                                                      constraints[i][j]);
+  }
   builder.create<mlir::func::ReturnOp>(location, values);
   if (mlir::failed(mlir::verify(*module)))
     throw std::invalid_argument("candidate export failed verification");
@@ -60,7 +60,7 @@ mlir::OwningOpRef<mlir::ModuleOp> prepareCandidateModule(
 }
 
 EvaluationResult RegionEvaluator::evaluate(
-    mlir::ModuleOp prepared, const BoundaryState& boundary,
+    mlir::ModuleOp prepared, llvm::ArrayRef<TensorSharding> inputs,
     const ShardyRunOptions& options) const {
   EvaluationResult result;
   if (options.stop_after != ShardyStage::Collectives)
@@ -68,28 +68,33 @@ EvaluationResult RegionEvaluator::evaluate(
         "region evaluation requires collective conversion");
   mlir::OwningOpRef<mlir::ModuleOp> module(prepared.clone());
   auto function = module->lookupSymbol<mlir::func::FuncOp>("main");
-  if (!function || function.getNumArguments() != boundary.inputs.size() ||
-      function.getNumResults() != boundary.outputs.size()) {
-    result.failure = "boundary arity mismatch";
+  if (!function || function.getNumArguments() != inputs.size()) {
+    result.failure = "input arity mismatch";
     return result;
   }
-  for (size_t i = 0; i < boundary.inputs.size(); ++i) {
+  // Save constraints before propagation closes their open dimensions.
+  std::vector<std::vector<mlir::sdy::TensorShardingAttr>> constraints(
+      function.getNumResults());
+  auto ret = llvm::cast<mlir::func::ReturnOp>(
+      function.getBody().front().getTerminator());
+  for (size_t i = 0; i < constraints.size(); ++i) {
+    if (auto attr = function.getResultAttrOfType<mlir::sdy::TensorShardingAttr>(
+            i, "sdy.sharding"))
+      constraints[i].push_back(attr);
+    for (auto& use : ret.getOperand(i).getUses())
+      if (auto constraint =
+              llvm::dyn_cast<mlir::sdy::ShardingConstraintOp>(use.getOwner()))
+        if (constraint->use_empty())
+          constraints[i].push_back(constraint.getSharding());
+  }
+  for (size_t i = 0; i < inputs.size(); ++i) {
     auto type = llvm::dyn_cast<mlir::RankedTensorType>(
         function.getArgument(i).getType());
-    if (!type || !validExactSharding(boundary.inputs[i], type, mesh_)) {
+    if (!type || !validExactSharding(inputs[i], type, mesh_)) {
       result.failure = "invalid input layout";
       return result;
     }
-    function.setArgAttr(i, "sdy.sharding", boundary.inputs[i].attr);
-  }
-  for (size_t i = 0; i < boundary.outputs.size(); ++i) {
-    auto type =
-        llvm::dyn_cast<mlir::RankedTensorType>(function.getResultTypes()[i]);
-    if (!type || !validExactSharding(boundary.outputs[i], type, mesh_)) {
-      result.failure = "invalid output layout";
-      return result;
-    }
-    function.setResultAttr(i, "sdy.sharding", boundary.outputs[i].attr);
+    function.setArgAttr(i, "sdy.sharding", inputs[i].attr);
   }
   ShardyRunner runner;
   if (mlir::failed(runner.run(*module, options))) {
@@ -97,13 +102,48 @@ EvaluationResult RegionEvaluator::evaluate(
     return result;
   }
   function = module->lookupSymbol<mlir::func::FuncOp>("main");
-  if (!matchesBoundary(function, boundary)) {
-    result.failure = "Shardy changed the requested boundary contract";
-    return result;
+  result.boundary.inputs.assign(inputs.begin(), inputs.end());
+  for (size_t i = 0; i < inputs.size(); ++i)
+    if (function.getArgAttr(i, "sdy.sharding") != inputs[i].attr) {
+      result.failure = "Shardy changed the requested input contract";
+      return result;
+    }
+  ret = llvm::cast<mlir::func::ReturnOp>(
+      function.getBody().front().getTerminator());
+  for (size_t i = 0; i < function.getNumResults(); ++i) {
+    auto type =
+        llvm::dyn_cast<mlir::RankedTensorType>(function.getResultTypes()[i]);
+    if (!type) {
+      result.failure = "invalid output type";
+      return result;
+    }
+    auto attr = function.getResultAttrOfType<mlir::sdy::TensorShardingAttr>(
+        i, "sdy.sharding");
+    TensorSharding layout =
+        attr ? TensorSharding{attr} : replicatedSharding(type, mesh_);
+    if (!validExactSharding(layout, type, mesh_)) {
+      result.failure = "invalid inferred output layout";
+      return result;
+    }
+    for (auto constraint : constraints[i])
+      if (!compatibleSharding(layout.attr, constraint, mesh_)) {
+        result.failure = "inferred output conflicts with required constraint";
+        return result;
+      }
+    auto value = ret.getOperand(i);
+    auto actual = mlir::sdy::getSharding(value);
+    if ((actual ? TensorSharding{actual} : replicatedSharding(type, mesh_)) !=
+        layout) {
+      result.failure = "returned value disagrees with output contract";
+      return result;
+    }
+    function.setResultAttr(i, "sdy.sharding", layout.attr);
+    result.boundary.outputs.push_back(layout);
   }
   result.feasible = true;
   result.cost = model_.estimate(*module, mesh_.mesh);
-  result.lowered_mlir = runner.takeFinalMlir();
+  llvm::raw_string_ostream out(result.lowered_mlir);
+  module->print(out);
   return result;
 }
 

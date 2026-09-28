@@ -8,28 +8,41 @@
 namespace joint_shard {
 namespace {
 using BoundaryStateTest = test::RegionTest;
-TEST_F(BoundaryStateTest, BoundaryStatesAreExactTypedAndBounded) {
+TEST_F(BoundaryStateTest, InputStatesAreExactTypedAndBounded) {
   auto module = scalingDot();
   auto region = regions(*module)[0];
   auto mesh = selectMesh(*module);
-  auto all = enumerateBoundaryStates(region, mesh);
-  EXPECT_EQ(all.states.size(), 27);  // scalar R; 3 choices for A, B, result.
+  auto all = enumerateInputStates(region, mesh);
+  EXPECT_EQ(all.states.size(),
+            9);  // scalar R; 3 choices for each matrix input.
   EXPECT_FALSE(all.truncated);
   for (const auto& state : all.states) {
-    EXPECT_EQ(state.inputs[0].attr.getRank(), 0);
-    for (const auto& input : state.inputs)
-      EXPECT_TRUE(input.attr.isFullyClosed());
-    for (const auto& output : state.outputs)
-      EXPECT_TRUE(output.attr.isFullyClosed());
+    EXPECT_EQ(state[0].attr.getRank(), 0);
+    for (const auto& input : state) EXPECT_TRUE(input.attr.isFullyClosed());
   }
-  auto capped = enumerateBoundaryStates(region, mesh, {}, 5);
+  auto capped = enumerateInputStates(region, mesh, {}, 5);
   EXPECT_EQ(capped.states.size(), 5);
   EXPECT_TRUE(capped.truncated);
-  auto exactCap = enumerateBoundaryStates(region, mesh, {}, 27);
+  auto exactCap = enumerateInputStates(region, mesh, {}, 9);
   EXPECT_FALSE(exactCap.truncated);
   auto vector =
       mlir::RankedTensorType::get({7}, mlir::Float32Type::get(&context));
   EXPECT_EQ(tensorLayoutChoices(vector, mesh, {}, {}).size(), 1);
+}
+
+TEST_F(BoundaryStateTest, ZeroInputsHaveOneAssignmentRegardlessOfOutputs) {
+  auto module = parse(R"mlir(module {
+    func.func @main() -> (tensor<8xf32>, tensor<8xf32>) {
+      %a = stablehlo.constant dense<1.0> : tensor<8xf32>
+      %b = stablehlo.negate %a : tensor<8xf32>
+      return %a, %b : tensor<8xf32>, tensor<8xf32>
+    }
+  })mlir");
+  auto enumeration =
+      enumerateInputStates(regions(*module)[0], selectMesh(*module), {}, 1);
+  ASSERT_EQ(enumeration.states.size(), 1);
+  EXPECT_TRUE(enumeration.states[0].empty());
+  EXPECT_FALSE(enumeration.truncated);
 }
 
 TEST_F(BoundaryStateTest, FixedCombinedLayoutIsPreservedOutsideCanonicalSet) {
@@ -41,14 +54,10 @@ TEST_F(BoundaryStateTest, FixedCombinedLayoutIsPreservedOutsideCanonicalSet) {
       return %a : tensor<8x4xf32>
     }
   })mlir");
-  auto states =
-      enumerateBoundaryStates(regions(*module)[0], selectMesh(*module));
+  auto states = enumerateInputStates(regions(*module)[0], selectMesh(*module));
   ASSERT_EQ(states.states.size(), 1);
-  EXPECT_EQ(states.states[0].inputs[0], states.states[0].outputs[0]);
-  EXPECT_EQ(states.states[0].inputs[0].attr.getDimSharding(0).getAxes().size(),
-            1);
-  EXPECT_EQ(states.states[0].inputs[0].attr.getDimSharding(1).getAxes().size(),
-            1);
+  EXPECT_EQ(states.states[0][0].attr.getDimSharding(0).getAxes().size(), 1);
+  EXPECT_EQ(states.states[0][0].attr.getDimSharding(1).getAxes().size(), 1);
 }
 
 TEST_F(BoundaryStateTest, PreservesDisjointShardingAndReplicatedSubAxes) {
@@ -61,10 +70,10 @@ TEST_F(BoundaryStateTest, PreservesDisjointShardingAndReplicatedSubAxes) {
     }
   })mlir");
   auto mesh = selectMesh(*module);
-  auto states = enumerateBoundaryStates(regions(*module)[0], mesh);
+  auto states = enumerateInputStates(regions(*module)[0], mesh);
   ASSERT_FALSE(states.states.empty());
   for (const auto& state : states.states) {
-    auto axes = state.inputs[0].attr.getDimSharding(0).getAxes();
+    auto axes = state[0].attr.getDimSharding(0).getAxes();
     ASSERT_EQ(axes.size(), 1);
     EXPECT_EQ(axes[0].getSubAxisInfo().getSize(), 2);
   }
@@ -78,11 +87,10 @@ TEST_F(BoundaryStateTest, OpenConstraintsPermitOnlyCompatibleRefinements) {
       return %a : tensor<8x4xf32>
     }
   })mlir");
-  auto states =
-      enumerateBoundaryStates(regions(*module)[0], selectMesh(*module));
-  ASSERT_EQ(states.states.size(), 6);
+  auto states = enumerateInputStates(regions(*module)[0], selectMesh(*module));
+  ASSERT_EQ(states.states.size(), 2);
   for (const auto& state : states.states)
-    EXPECT_TRUE(state.inputs[0].attr.getDimSharding(0).getAxes().empty());
+    EXPECT_TRUE(state[0].attr.getDimSharding(0).getAxes().empty());
 }
 
 }  // namespace

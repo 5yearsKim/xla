@@ -62,39 +62,32 @@ int main(int argc, char** argv) {
         cxxopts::value<std::string>())("max-candidates",
                                        "Maximum candidates per region",
                                        cxxopts::value<std::string>())(
-        "max-boundary-states", "Maximum boundary states",
+        "max-input-states", "Maximum input assignments",
         cxxopts::value<std::string>())(
         "optimize-chain", "Select one complete linear-chain implementation")(
         "optimize-dag",
         "Select one implementation with residuals and branching")(
-        "dag-search", "Selected DAG search: exact or resolved",
-        cxxopts::value<std::string>())(
         "max-live-values", "Maximum intermediate values in any DAG live cut",
         cxxopts::value<std::string>())("max-dag-states",
                                        "Maximum retained DAG states per cut",
                                        cxxopts::value<std::string>())(
         "max-dag-transitions", "Maximum DAG transitions per region",
-        cxxopts::value<std::string>())(
-        "chain-search", "Selected chain search: exact or resolved",
         cxxopts::value<std::string>())("max-chain-transitions",
                                        "Maximum transitions per chain layer",
                                        cxxopts::value<std::string>())(
         "compose-regions", "Compose adjacent region indices A,B",
-        cxxopts::value<std::string>())("compose-pruned",
-                                       "Include candidates removed by pruning")(
-        "max-pair-evaluations", "Maximum pair evaluations",
-        cxxopts::value<std::string>())("data-axis",
-                                       "Mesh axis for data parallelism",
+        cxxopts::value<std::string>())("max-pair-evaluations",
+                                       "Maximum pair evaluations",
                                        cxxopts::value<std::string>())(
-        "model-axis", "Mesh axis for model parallelism",
-        cxxopts::value<std::string>())(
+        "data-axis", "Mesh axis for data parallelism",
+        cxxopts::value<std::string>())("model-axis",
+                                       "Mesh axis for model parallelism",
+                                       cxxopts::value<std::string>())(
         "data-dim", "Default tensor dimension for data axis, or none",
         cxxopts::value<std::string>())(
         "model-dim", "Default tensor dimension for model axis, or none",
         cxxopts::value<std::string>())(
         "input-policy", "Input port policy PORT:DATA_DIM:MODEL_DIM",
-        cxxopts::value<std::string>())(
-        "output-policy", "Output port policy PORT:DATA_DIM:MODEL_DIM",
         cxxopts::value<std::string>())("rule-blocker",
                                        "Rule blocker operation name, or none",
                                        cxxopts::value<std::string>())(
@@ -138,19 +131,8 @@ int main(int argc, char** argv) {
         options.dag.max_states = positive(value);
       else if (name == "max-dag-transitions")
         options.dag.max_transitions = positive(value);
-      else if (name == "dag-search") {
-        if (value != "exact" && value != "resolved")
-          throw std::invalid_argument("dag-search must be exact or resolved");
-        options.dag.mode = value == "resolved" ? DagSearchMode::Resolved
-                                               : DagSearchMode::Exact;
-      } else if (name == "max-chain-transitions")
+      else if (name == "max-chain-transitions")
         options.max_chain_transitions = positive(value);
-      else if (name == "chain-search") {
-        if (value != "exact" && value != "resolved")
-          throw std::invalid_argument("chain-search must be exact or resolved");
-        options.chain_resolved = value == "resolved";
-      } else if (name == "compose-pruned")
-        options.compose_pruned = true;
       else if (name == "max-pair-evaluations")
         options.max_pair_evaluations = positive(value);
       else if (name == "compose-regions") {
@@ -171,8 +153,8 @@ int main(int argc, char** argv) {
         options.regionizer.max_region_ops = positive(value);
       else if (name == "max-candidates")
         options.max_candidates = positive(value);
-      else if (name == "max-boundary-states")
-        options.max_boundary_states = positive(value);
+      else if (name == "max-input-states")
+        options.max_input_states = positive(value);
       else if (name == "mesh")
         options.mesh_name = value;
       else if (name == "dump-dir")
@@ -194,7 +176,7 @@ int main(int argc, char** argv) {
           options.regionizer.rule_blockers.emplace_back(value);
         else
           throw std::invalid_argument("empty rule blocker");
-      } else if (name == "input-policy" || name == "output-policy") {
+      } else if (name == "input-policy") {
         auto first = value.find(':'), last = value.rfind(':');
         if (first == std::string_view::npos || first == last)
           throw std::invalid_argument(
@@ -207,8 +189,7 @@ int main(int argc, char** argv) {
         DimensionPolicy policy{
             dimension(value.substr(first + 1, last - first - 1)),
             dimension(value.substr(last + 1))};
-        (name == "input-policy" ? options.layouts.inputs
-                                : options.layouts.outputs)[port] = policy;
+        options.layouts.inputs[port] = policy;
       } else if (name == "compute-work-per-us")
         options.cost.compute_work_per_us = number(value);
       else if (name == "bandwidth-bytes-per-us")

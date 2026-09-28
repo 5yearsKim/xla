@@ -97,7 +97,8 @@ class ChainOptimizationTest : public test::MlirTest {
   }
 };
 
-TEST_F(ChainOptimizationTest, ThreeToFiveRegionsMatchExhaustiveAndEmitOneMain) {
+TEST_F(ChainOptimizationTest,
+       ThreeToFiveRegionsRespectReferenceBoundAndEmitOneMain) {
   for (size_t n : {3, 4, 5}) {
     SCOPED_TRACE(n);
     auto module = fixture(n);
@@ -108,21 +109,18 @@ TEST_F(ChainOptimizationTest, ThreeToFiveRegionsMatchExhaustiveAndEmitOneMain) {
     ASSERT_TRUE(report.chain);
     const auto& chain = *report.chain;
     ASSERT_EQ(report.regions.size(), n);
-    ASSERT_EQ(chain.exact.steps.size(), n);
+    ASSERT_EQ(chain.result.steps.size(), n);
     EXPECT_EQ(print(*module), before);
-    EXPECT_FALSE(chain.exact.truncated);
-    EXPECT_FALSE(chain.boundary_truncated);
+    EXPECT_FALSE(chain.result.truncated);
+    EXPECT_FALSE(chain.input_truncated);
     ReshardCostOracle oracle(report.mesh);
     ReshardPlanner planner = [&](auto from, auto to, auto type) {
       return oracle.plan(from, to, type);
     };
-    EXPECT_NEAR(
-        chain.exact.cost.total(),
-        exhaustive(report.regions, chain.interface, chain.contract, planner),
-        1e-9);
-    EXPECT_LE(chain.resolved.cost.total(), chain.exact.cost.total() + 1e-9);
-    EXPECT_LE(chain.exact.cost.total(), chain.original.cost.total() + 1e-9);
-    EXPECT_LT(chain.exact.cost.total(), chain.greedy.cost.total());
+    EXPECT_LE(
+        chain.result.cost.total(),
+        exhaustive(report.regions, chain.interface, chain.contract, planner) +
+            1e-9);
     auto selected = parse(chain.selected().lowered_mlir);
     EXPECT_EQ(std::distance(selected->getOps<mlir::func::FuncOp>().begin(),
                             selected->getOps<mlir::func::FuncOp>().end()),
@@ -136,22 +134,12 @@ TEST_F(ChainOptimizationTest, ThreeToFiveRegionsMatchExhaustiveAndEmitOneMain) {
     EXPECT_NEAR(actual.communication, chain.selected().cost.communication,
                 1e-9);
     auto text = formatReport(chain);
-    EXPECT_NE(text.find("original + DP"), std::string::npos);
-    EXPECT_NE(text.find("Savings versus greedy"), std::string::npos);
-    // Real lowered greedy winner has an executable nonidentity seam adapter.
-    auto greedy = parse(materializeExecutionPlan(
-        chain.greedy.execution, report.regions, report.mesh, CostModel{}));
-    EXPECT_NEAR(CostModel().estimate(*greedy, report.mesh.mesh).total(),
-                chain.greedy.cost.total(), 1e-9);
-    auto original = parse(materializeExecutionPlan(chain.original.execution,
-                                                   report.original_regions,
-                                                   report.mesh, CostModel{}));
-    EXPECT_NEAR(CostModel().estimate(*original, report.mesh.mesh).total(),
-                chain.original.cost.total(), 1e-9);
+    EXPECT_NE(text.find("with dominance pruning"), std::string::npos);
   }
 }
 
-TEST_F(ChainOptimizationTest, SyntheticDPBeatsGreedyForEveryChainLength) {
+TEST_F(ChainOptimizationTest,
+       SyntheticSearchFindsCompleteOptimumForEveryChainLength) {
   auto module = fixture(3);
   auto mesh = selectMesh(*module);
   auto type =
@@ -179,22 +167,17 @@ TEST_F(ChainOptimizationTest, SyntheticDPBeatsGreedyForEveryChainLength) {
     }
     BoundaryState contract{{r}, {r}};
     auto dp = optimizeChain(regions, interface, contract, oracle);
-    auto greedy = optimizeChain(regions, interface, contract, oracle,
-                                {ChainSearchMode::Greedy});
-    ASSERT_TRUE(dp.feasible && greedy.feasible);
+    ASSERT_TRUE(dp.feasible);
     EXPECT_EQ(dp.cost.total(), 3 * n);
-    EXPECT_LT(dp.cost.total(), greedy.cost.total());
     EXPECT_EQ(dp.cost.total(),
               exhaustive(regions, interface, contract, oracle));
     auto repeat = optimizeChain(regions, interface, contract, oracle);
     EXPECT_EQ(dp.steps[0].selected.requested,
               repeat.steps[0].selected.requested);
-    auto capped = optimizeChain(regions, interface, contract, oracle,
-                                {ChainSearchMode::Exact, 1});
+    auto capped = optimizeChain(regions, interface, contract, oracle, {1});
     EXPECT_TRUE(capped.truncated);
     EXPECT_EQ(capped.steps.size(), n);
-    EXPECT_THROW(optimizeChain(regions, interface, contract, oracle,
-                               {ChainSearchMode::Exact, 0}),
+    EXPECT_THROW(optimizeChain(regions, interface, contract, oracle, {0}),
                  std::invalid_argument);
     auto unknown = optimizeChain(
         regions, interface, contract, [](auto from, auto to, auto tensor) {
@@ -202,6 +185,47 @@ TEST_F(ChainOptimizationTest, SyntheticDPBeatsGreedyForEveryChainLength) {
         });
     EXPECT_FALSE(unknown.feasible);
   }
+}
+
+TEST_F(ChainOptimizationTest, PrefixRecipePreservesCheaperIndirectConversion) {
+  auto module = fixture(3);
+  auto mesh = selectMesh(*module);
+  auto type =
+      mlir::RankedTensorType::get({8, 4}, mlir::Float32Type::get(&context));
+  auto layouts = tensorLayoutChoices(type, mesh, {}, {});
+  auto r = layouts[0], dp = layouts[1], tp = layouts[2];
+  std::vector<RegionSummary> regions(2);
+  regions[0].interface = {{{0, type}}, {{1, type}}};
+  regions[1].interface = {{{1, type}}, {{2, type}}};
+  regions[0].plans = {{0, {{r}, {dp}}, {100, 0, 0}, ""},
+                      {1, {{r}, {r}}, {10, 0, 0}, ""}};
+  regions[1].plans = {{0, {{tp}, {r}}, {1, 0, 0}, ""}};
+  ChainInterface graph;
+  graph.external = {{{0, type}}, {{2, type}}};
+  for (size_t i = 0; i < 2; ++i) {
+    regions[i].finalizePlans();
+    graph.regions.push_back(regions[i].interface);
+    graph.inputs.push_back({i ? -1 : 0});
+    graph.intermediate_inputs.push_back(0);
+  }
+  ReshardPlanner oracle = [&](auto from, auto to, auto tensor) {
+    double cost = from == to               ? 0
+                  : from == r && to == dp  ? 1
+                  : from == dp && to == tp ? 1
+                  : from == r && to == tp  ? 50
+                                           : 1000;
+    return ReshardPlan{true, {0, cost, 0}, from, to, tensor, {}};
+  };
+  auto result = optimizeChain(regions, graph, {{r}, {r}}, oracle);
+  ASSERT_TRUE(result.feasible) << result.failure;
+  EXPECT_EQ(result.cost.total(), 13);
+  EXPECT_EQ(result.dominance_pruned, 1);
+  ASSERT_EQ(result.steps[0].outgoing.size(), 1);
+  EXPECT_EQ(result.steps[0].selected.boundary.outputs[0], r);
+  EXPECT_EQ(result.steps[0].outgoing[0].from, r);
+  EXPECT_EQ(result.steps[0].outgoing[0].to, dp);
+  EXPECT_EQ(result.steps[1].incoming->from, dp);
+  EXPECT_EQ(result.steps[1].incoming->to, tp);
 }
 
 TEST_F(ChainOptimizationTest,
@@ -218,7 +242,7 @@ TEST_F(ChainOptimizationTest,
   })mlir");
   RegionOptimizerOptions options;
   options.optimize_chain = true;
-  options.max_boundary_states = 9;
+  options.max_input_states = 9;
   auto report = summarizeRegions(*module, options);
   ASSERT_EQ(report.regions.size(), 3);
   const auto& chain = *report.chain;
@@ -234,7 +258,7 @@ TEST_F(ChainOptimizationTest,
                                report.mesh));
   EXPECT_EQ(chain.interface.external.outputs[0],
             chain.interface.external.outputs[2]);
-  EXPECT_FALSE(chain.boundary_truncated);
+  EXPECT_FALSE(chain.input_truncated);
   auto result = parse(chain.selected().lowered_mlir);
   auto main = result->lookupSymbol<mlir::func::FuncOp>("main");
   EXPECT_EQ(main.getNumArguments(), 3);
@@ -282,19 +306,17 @@ TEST_F(ChainOptimizationTest,
   std::mt19937 random(42);
   std::uniform_real_distribution<float> distribution(-0.5f, 0.5f);
   for (size_t n : {3, 4, 5}) {
-    for (bool resolved : {false, true}) {
-      SCOPED_TRACE(std::to_string(n) + " resolved=" + std::to_string(resolved));
+    {
+      SCOPED_TRACE(n);
       auto module = fixture(n);
       RegionOptimizerOptions options;
       options.optimize_chain = true;
-      options.chain_resolved = resolved;
+
       options.cost.compute_work_per_us = 1;
       options.cost.collective_latency_us = 0.01;
       auto report = summarizeRegions(*module, options);
       const auto& chain = *report.chain;
       auto selected = parse(chain.selected().lowered_mlir);
-      EXPECT_NE(chain.selected().lowered_mlir.find("sdy.all_gather"),
-                std::string::npos);
       // The artifact count equals leaf execution occurrences, including child
       // collectives and every seam/wrapper adapter. Composite references recur
       // once in this chain, so each leaf is emitted once.
@@ -406,7 +428,7 @@ TEST_F(ChainOptimizationTest,
   auto lhs = tensorLayoutChoices(lhsType, mesh, policy, {0, 1});
   auto rhs = tensorLayoutChoices(rhsType, mesh, policy, {1, 0});
   BoundaryState boundary{{lhs[2], rhs[2]}, {layouts[0]}};
-  auto evaluated = RegionEvaluator(mesh).evaluate(*dot, boundary);
+  auto evaluated = RegionEvaluator(mesh).evaluate(*dot, boundary.inputs);
   ASSERT_TRUE(evaluated.feasible);
   ASSERT_NE(evaluated.lowered_mlir.find("sdy.all_reduce"), std::string::npos);
   std::vector<test::DenseTensor> arguments{test::DenseTensor(128),
@@ -432,7 +454,7 @@ TEST_F(ChainOptimizationTest,
   auto module = fixture(3);
   RegionOptimizerOptions options;
   options.optimize_chain = true;
-  options.chain_resolved = true;
+
   options.rewriting.numerical_policy = NumericalPolicy::PreserveEvaluation;
   llvm::SmallString<128> directory;
   ASSERT_FALSE(
@@ -461,19 +483,17 @@ TEST_F(ChainOptimizationTest, ReportsEverySearchBudgetAndKeepsFinalContract) {
   RegionOptimizerOptions options;
   options.optimize_chain = true;
   options.max_candidates = 1;
-  options.max_boundary_states = 1;
+  options.max_input_states = 1;
   auto report = summarizeRegions(*module, options);
   ASSERT_TRUE(report.chain->selected().feasible);
-  EXPECT_TRUE(report.chain->boundary_truncated);
+  EXPECT_TRUE(report.chain->input_truncated);
   EXPECT_TRUE(report.chain->candidate_cap_reached);
   EXPECT_EQ(report.chain->selected().contract, report.chain->contract);
   EXPECT_EQ(report.chain->selected().steps.size(), 5);
-  EXPECT_NEAR(report.chain->exact.cost.total(),
-              report.chain->original.cost.total(), 1e-9);
   auto main = parse(report.chain->selected().lowered_mlir);
   EXPECT_TRUE(mlir::succeeded(mlir::verify(*main)));
   auto text = formatReport(*report.chain);
-  EXPECT_NE(text.find("Boundary truncated: 1"), std::string::npos);
+  EXPECT_NE(text.find("Input truncated: 1"), std::string::npos);
   EXPECT_NE(text.find("profiles skipped at cap: 1"), std::string::npos);
 }
 }  // namespace

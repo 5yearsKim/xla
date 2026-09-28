@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <stdexcept>
 
@@ -15,6 +16,9 @@ struct Prefix {
   std::vector<ReshardPlan> incoming;
   size_t predecessor = 0;
   std::vector<PlanId> path;
+  std::optional<size_t> replacement;
+  std::vector<ReshardPlan> outgoing;
+  bool active = true;
 };
 bool better(const Prefix& a, const Prefix& b) {
   return a.cost.total() < b.cost.total() ||
@@ -57,7 +61,6 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
       interface.live_after)
     throw std::invalid_argument("DAG live cuts do not match dependencies");
   DagResult result;
-  result.mode = options.mode;
   result.contract = contract;
   for (size_t i = 0; i < regions.size(); ++i) {
     if (regions[i].interface.inputs != interface.regions[i].inputs ||
@@ -108,8 +111,7 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
         ++result.contract_rejections;
         continue;
       }
-      auto selected = resolveRegionPlan(
-          region, plan.id, options.mode == DagSearchMode::Resolved, oracle);
+      auto selected = resolveRegionPlan(region, plan.id, oracle);
       if (!selected.cost.known()) {
         ++result.unknown_cost_rejections;
         continue;
@@ -122,6 +124,7 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
     bool transitionCap = false;
     for (size_t p = 0; p < previousLayer.size(); ++p) {
       const auto& prefix = previousLayer[p];
+      if (!prefix.active) continue;
       Layouts available = external;
       if (i)
         for (size_t j = 0; j < prefix.live.size(); ++j)
@@ -169,9 +172,7 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
                         choice.boundary.outputs[j]);
         for (auto port : interface.live_after[i])
           next.live.push_back(after.at(port.value));
-        auto key = options.mode == DagSearchMode::Greedy
-                       ? std::string{}
-                       : BoundaryState{{}, next.live}.key();
+        auto key = BoundaryState{{}, next.live}.key();
         auto found = best.find(key);
         if (found == best.end() || better(next, found->second))
           best.insert_or_assign(key, std::move(next));
@@ -188,29 +189,77 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
     }
     std::vector<Prefix> retained;
     for (auto& [key, prefix] : best) retained.push_back(std::move(prefix));
+    std::vector<BoundaryState> boundaries;
+    std::vector<Cost> costs;
+    for (const auto& prefix : retained) {
+      boundaries.push_back({contract.inputs, prefix.live});
+      costs.push_back(prefix.cost);
+    }
+    RegionInterface prefixInterface{interface.external.inputs,
+                                    interface.live_after[i]};
+    auto pruned = pruneBoundaryPlans(
+        prefixInterface, boundaries, costs, [&](auto from, auto to, auto type) {
+          auto adapter = oracle(from, to, type);
+          return adapter.feasible ? adapter.cost : Cost{0, 0, 1};
+        });
+    result.dominance_pruned += pruned.dominance.size();
+    for (const auto& witness : pruned.dominance) {
+      auto& prefix = retained[witness.removed_id];
+      const auto& core = retained[witness.replacement_id];
+      prefix.replacement = witness.replacement_id;
+      prefix.cost = core.cost;
+      prefix.path = core.path;
+      for (size_t j = 0; j < prefix.live.size(); ++j) {
+        auto adapter = oracle(core.live[j], prefix.live[j],
+                              prefixInterface.outputs[j].type);
+        prefix.cost += adapter.cost;
+        prefix.outgoing.push_back(std::move(adapter));
+      }
+      prefix.selected = {};
+      prefix.incoming.clear();
+    }
+    // Contract recipes remain addressable even if their implementation isn't
+    // active at the next cut. Stable indices also preserve reconstruction.
+    std::vector<size_t> active;
+    for (size_t j = 0; j < retained.size(); ++j) active.push_back(j);
     size_t discarded = 0;
-    if (retained.size() > options.max_states) {
-      std::sort(retained.begin(), retained.end(), better);
-      discarded = retained.size() - options.max_states;
-      retained.resize(options.max_states);
+    if (active.size() > options.max_states) {
+      std::sort(active.begin(), active.end(), [&](size_t l, size_t r) {
+        return better(retained[l], retained[r]);
+      });
+      discarded = active.size() - options.max_states;
+      active.resize(options.max_states);
+      for (auto& prefix : retained) prefix.active = false;
+      for (auto id : active) retained[id].active = true;
       result.truncated = true;
     }
     result.states_discarded += discarded;
     result.discarded_per_layer.push_back(discarded);
-    result.states_retained += retained.size();
-    result.states_per_layer.push_back(retained.size());
+    result.states_retained += active.size();
+    result.states_per_layer.push_back(active.size());
     layers.push_back(std::move(retained));
   }
-  auto winner =
-      std::min_element(layers.back().begin(), layers.back().end(), better);
+  auto winner = std::min_element(layers.back().begin(), layers.back().end(),
+                                 [&](const Prefix& a, const Prefix& b) {
+                                   if (a.active != b.active) return a.active;
+                                   return better(a, b);
+                                 });
   result.cost = winner->cost;
   size_t index = winner - layers.back().begin();
-  for (size_t i = regions.size(); i-- > 0;) {
-    const auto& prefix = layers[i][index];
-    result.steps.push_back({i, prefix.selected, prefix.incoming, prefix.live});
-    index = prefix.predecessor;
-  }
-  std::reverse(result.steps.begin(), result.steps.end());
+  std::function<void(size_t, size_t)> reconstruct = [&](size_t layer,
+                                                        size_t selected) {
+    const auto& prefix = layers[layer][selected];
+    if (prefix.replacement) {
+      reconstruct(layer, *prefix.replacement);
+      result.steps.back().outgoing = prefix.outgoing;
+      result.steps.back().live_layouts = prefix.live;
+      return;
+    }
+    if (layer) reconstruct(layer - 1, prefix.predecessor);
+    result.steps.push_back(
+        {layer, prefix.selected, prefix.incoming, {}, prefix.live});
+  };
+  reconstruct(regions.size() - 1, index);
   for (size_t i = 0; i < result.steps.size(); ++i) {
     const auto& step = result.steps[i];
     std::vector<ExecutionPlanId> local;
@@ -229,6 +278,10 @@ DagResult optimizeDag(const std::vector<RegionSummary>& regions,
     std::vector<ExecutionPlanId> children;
     if (i) children.push_back(result.execution.root);
     children.push_back(consumer);
+    for (size_t j = 0; j < step.outgoing.size(); ++j)
+      if (step.outgoing[j].from != step.outgoing[j].to)
+        children.push_back(result.execution.adapter(interface.live_after[i][j],
+                                                    step.outgoing[j]));
     result.execution.root = result.execution.composite(
         {interface.external.inputs, interface.live_after[i]},
         {contract.inputs, step.live_layouts}, std::move(children));

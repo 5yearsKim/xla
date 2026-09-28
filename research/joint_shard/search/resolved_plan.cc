@@ -4,24 +4,17 @@
 #include <stdexcept>
 namespace joint_shard {
 ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
-                                     PlanId requested, bool use_frontier,
+                                     PlanId requested,
                                      const ReshardPlanner& oracle) {
   const auto& exact = region.plans.at(requested);
   ResolvedRegionPlan result;
   result.requested = requested;
-  result.implementation = requested;
+  result.implementation = exact.replacement.value_or(requested);
   result.boundary = exact.boundary;
-  if (use_frontier) {
-    for (const auto& witness : region.dominance)
-      if (witness.removed_id == requested) {
-        result.implementation = witness.replacement_id;
-        break;
-      }
-    if (std::find(region.frontier.begin(), region.frontier.end(),
-                  result.implementation) == region.frontier.end())
-      throw std::invalid_argument(
-          "dominance witness does not resolve directly to frontier");
-  }
+  if (std::find(region.frontier.begin(), region.frontier.end(),
+                result.implementation) == region.frontier.end())
+    throw std::invalid_argument(
+        "replacement must reference a surviving implementation");
   const auto& core = region.plans.at(result.implementation);
   result.candidate_id = core.candidate_id;
   result.core_cost = core.cost;
@@ -41,7 +34,7 @@ ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
   }
   result.cost = result.core_cost;
   result.cost += result.adapters_cost;
-  if (use_frontier && exact.cost.known() && result.cost.known() &&
+  if (exact.cost.known() && result.cost.known() &&
       result.cost.total() > exact.cost.total() + 1e-9)
     throw std::invalid_argument(
         "resolved plan exceeds exact cost (inconsistent oracle)");

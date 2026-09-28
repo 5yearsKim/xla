@@ -48,7 +48,6 @@ struct LayoutPolicy {
   DimensionPolicy defaults;
   // Port indices refer to the deterministic interface of each region.
   std::map<size_t, DimensionPolicy> inputs;
-  std::map<size_t, DimensionPolicy> outputs;
 };
 
 TensorSharding replicatedSharding(mlir::RankedTensorType type,
@@ -57,15 +56,21 @@ std::vector<TensorSharding> tensorLayoutChoices(
     mlir::RankedTensorType type, const MeshContext& mesh,
     const LayoutPolicy& policy, const DimensionPolicy& dimensions,
     llvm::ArrayRef<mlir::sdy::TensorShardingAttr> constraints = {});
-struct BoundaryEnumeration {
-  std::vector<BoundaryState> states;
+struct InputEnumeration {
+  std::vector<std::vector<TensorSharding>> states;
   bool truncated = false;
 };
-BoundaryEnumeration enumerateBoundaryStates(
+InputEnumeration enumerateInputStates(
     const Region& region, const MeshContext& mesh,
     const LayoutPolicy& policy = {}, size_t max_states = 256,
-    const std::map<void*, TensorSharding>& fixed_inputs = {},
+    const std::map<void*, TensorSharding>& fixed_inputs = {});
+// Constraints are requirements, never additional search choices.
+std::vector<std::vector<mlir::sdy::TensorShardingAttr>> outputConstraints(
+    const Region& region,
     const std::map<void*, TensorSharding>& fixed_outputs = {});
+bool compatibleSharding(mlir::sdy::TensorShardingAttr layout,
+                        mlir::sdy::TensorShardingAttr constraint,
+                        const MeshContext& mesh);
 // One exact contract: preserve annotations, close open dimensions without
 // adding axes, and replicate unconstrained ports.
 BoundaryState functionLayoutContract(mlir::func::FuncOp function,

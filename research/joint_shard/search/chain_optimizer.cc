@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <stdexcept>
 
@@ -13,6 +14,9 @@ struct Prefix {
   std::optional<ReshardPlan> incoming;
   size_t predecessor = 0;
   std::vector<PlanId> path;
+  std::vector<TensorSharding> outputs;
+  std::optional<size_t> replacement;
+  std::vector<ReshardPlan> outgoing;
 };
 bool better(const Prefix& a, const Prefix& b) {
   return a.cost.total() < b.cost.total() ||
@@ -61,7 +65,6 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
       throw std::invalid_argument("chain must have one intermediate per cut");
   }
   ChainResult result;
-  result.mode = options.mode;
   result.contract = contract;
   const auto start = std::chrono::steady_clock::now();
   auto elapsed = [&]() {
@@ -103,9 +106,7 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
         ++result.contract_rejections;
         continue;
       }
-      auto resolved =
-          resolveRegionPlan(regions[i], plan.id,
-                            options.mode == ChainSearchMode::Resolved, oracle);
+      auto resolved = resolveRegionPlan(regions[i], plan.id, oracle);
       if (!resolved.cost.known()) {
         ++result.unknown_cost_rejections;
         continue;
@@ -131,7 +132,7 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
           next.cost += prefix.cost;
           next.path = prefix.path;
           auto adapter =
-              oracle(prefix.selected.boundary.outputs.at(0),
+              oracle(prefix.outputs.at(0),
                      choice.boundary.inputs[interface.intermediate_inputs[i]],
                      regions[i - 1].interface.outputs[0].type);
           if (!adapter.feasible || !adapter.cost.known()) {
@@ -143,9 +144,8 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
         }
         next.cost += choice.cost;
         next.path.push_back(choice.requested);
-        auto key = options.mode == ChainSearchMode::Greedy
-                       ? std::string{}
-                       : outgoingKey(choice.boundary);
+        next.outputs = choice.boundary.outputs;
+        auto key = outgoingKey(choice.boundary);
         auto found = best.find(key);
         if (found == best.end() || better(next, found->second))
           best.insert_or_assign(key, std::move(next));
@@ -163,6 +163,35 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
     }
     std::vector<Prefix> retained;
     for (auto& [key, prefix] : best) retained.push_back(std::move(prefix));
+    std::vector<BoundaryState> boundaries;
+    std::vector<Cost> costs;
+    for (const auto& prefix : retained) {
+      boundaries.push_back({contract.inputs, prefix.outputs});
+      costs.push_back(prefix.cost);
+    }
+    RegionInterface prefixInterface{interface.external.inputs,
+                                    regions[i].interface.outputs};
+    auto pruned = pruneBoundaryPlans(
+        prefixInterface, boundaries, costs, [&](auto from, auto to, auto type) {
+          auto adapter = oracle(from, to, type);
+          return adapter.feasible ? adapter.cost : Cost{0, 0, 1};
+        });
+    result.dominance_pruned += pruned.dominance.size();
+    for (const auto& witness : pruned.dominance) {
+      auto& prefix = retained[witness.removed_id];
+      const auto& core = retained[witness.replacement_id];
+      prefix.replacement = witness.replacement_id;
+      prefix.cost = core.cost;
+      prefix.path = core.path;
+      for (size_t j = 0; j < prefix.outputs.size(); ++j) {
+        auto adapter = oracle(core.outputs[j], prefix.outputs[j],
+                              prefixInterface.outputs[j].type);
+        prefix.cost += adapter.cost;
+        prefix.outgoing.push_back(std::move(adapter));
+      }
+      prefix.selected = {};
+      prefix.incoming.reset();
+    }
     result.states_retained += retained.size();
     result.states_per_layer.push_back(retained.size());
     layers.push_back(std::move(retained));
@@ -171,12 +200,18 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
       std::min_element(layers.back().begin(), layers.back().end(), better);
   size_t index = winner - layers.back().begin();
   result.cost = winner->cost;
-  for (size_t i = regions.size(); i-- > 0;) {
-    const auto& prefix = layers[i][index];
-    result.steps.push_back({i, prefix.selected, prefix.incoming});
-    index = prefix.predecessor;
-  }
-  std::reverse(result.steps.begin(), result.steps.end());
+  std::function<void(size_t, size_t)> reconstruct = [&](size_t layer,
+                                                        size_t selected) {
+    const auto& prefix = layers[layer][selected];
+    if (prefix.replacement) {
+      reconstruct(layer, *prefix.replacement);
+      result.steps.back().outgoing = prefix.outgoing;
+      return;
+    }
+    if (layer) reconstruct(layer - 1, prefix.predecessor);
+    result.steps.push_back({layer, prefix.selected, prefix.incoming, {}});
+  };
+  reconstruct(regions.size() - 1, index);
   // Reconstruct just the winner. Prefix composites can themselves be children.
   for (size_t i = 0; i < result.steps.size(); ++i) {
     const auto& step = result.steps[i];
@@ -188,10 +223,17 @@ ChainResult optimizeChain(const std::vector<RegionSummary>& regions,
             regions[i - 1].interface.outputs[0], *step.incoming));
     }
     children.push_back(result.execution.resolved(i, regions[i], step.selected));
+    auto outputs = step.selected.boundary.outputs;
+    for (size_t j = 0; j < step.outgoing.size(); ++j) {
+      const auto& adapter = step.outgoing[j];
+      if (adapter.from != adapter.to)
+        children.push_back(
+            result.execution.adapter(regions[i].interface.outputs[j], adapter));
+      outputs[j] = adapter.to;
+    }
     RegionInterface prefixInterface{interface.external.inputs,
                                     regions[i].interface.outputs};
-    BoundaryState prefixBoundary{contract.inputs,
-                                 step.selected.boundary.outputs};
+    BoundaryState prefixBoundary{contract.inputs, outputs};
     result.execution.root = result.execution.composite(
         prefixInterface, prefixBoundary, std::move(children));
   }

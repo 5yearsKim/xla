@@ -12,7 +12,7 @@ struct ResolvedRegionPlan {
   std::vector<ReshardPlan> input_adapters, output_adapters;
 };
 ResolvedRegionPlan resolveRegionPlan(const RegionSummary& region,
-                                     PlanId requested, bool use_frontier,
+                                     PlanId requested,
                                      const ReshardPlanner& oracle);
 }  // namespace joint_shard
 #endif

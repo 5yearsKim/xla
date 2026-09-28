@@ -113,11 +113,17 @@ Search limits and rejection reasons are exposed through `--rewrite-report`.
 Contiguous supported islands share one graph and export cache across all outputs.
 
 `summarize_regions` splits supported computations into bounded regions, saturates
-once per region, evaluates unique original/compute/depth/memory candidates under
-exact boundary layouts, retains the best candidate per boundary, and prunes
-states served more cheaply by another plan plus directed reshards. It prints
+once per region, enumerates input layouts, and evaluates each unique
+original/compute/depth/memory candidate once per input assignment. Shardy infers
+unconstrained output layouts, including combined mesh-axis layouts. Required
+output annotations and function contracts remain constraints. The optimizer
+retains the cheapest candidate per complete inferred boundary and prunes plans
+served more cheaply by another implementation plus directed reshards.
+`--max-input-states=256` caps input enumeration; outputs add no search factor.
+Dominated implementations release their lowered IR and retain replacement
+recipes for their boundary contracts. It prints
 region frontiers and preserves the source module. Add `--compose-regions=0,1`
-to search and emit verified combined modules for an adjacent pair; see the
+to compose an adjacent pair, prune its outer boundaries, and emit surviving modules; see the
 [composition guide](../misc/REGION_OPTIMIZER.md#compose-two-regions). Candidate count
 defaults to a cap of 32, with at most five distinct profile candidates in this milestone.
 
@@ -139,10 +145,8 @@ bazel-bin/research/joint_shard/tools/summarize_regions \
 Chain mode writes `selected.mlir` (the chosen StableHLO + Shardy path) and
 `xla_input.mlir` (XLA-ready StableHLO) to `--output-dir`; stdout lists their
 paths and stderr contains the explanation. Use `--dump-dir` separately for
-candidate snapshots, `selected_plan.txt`, and a compact `comparison.txt`
-covering original-only DP, joint greedy, exact DP and dominance-resolved DP.
-`--chain-search=resolved` selects the latter; exact search
-is the default reference. `--max-chain-transitions=65536` limits each DP layer
+candidate snapshots and `selected_plan.txt`. Selection uses one search with
+automatic dominance pruning of regions and composed prefixes. `--max-chain-transitions=65536` limits each DP layer
 and reports truncation. See [REGION_OPTIMIZER.md](../misc/REGION_OPTIMIZER.md#optimize-a-complete-linear-chain)
 and the recorded [chain experiment](../misc/CHAIN_EXPERIMENT.md).
 
@@ -160,8 +164,7 @@ bazel-bin/research/joint_shard/tools/summarize_regions \
 ```
 
 This writes the same two final artifacts as chain mode.
-`--dag-search=resolved` selects dominance-resolved implementations;
-exact search is the default. `--max-live-values=4` rejects wider live cuts.
+DAG selection uses the same automatic dominance pruning across the full live cut. `--max-live-values=4` rejects wider live cuts.
 `--max-dag-states=4096` and `--max-dag-transitions=65536` bound each search
 layer and report truncation. See the [DAG search model](../misc/REGION_OPTIMIZER.md#optimize-residuals-and-branches)
 and the recorded [DAG experiment](../misc/DAG_EXPERIMENT.md).

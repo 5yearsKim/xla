@@ -33,12 +33,13 @@ TEST_F(RegionSummaryTest, ExactBoundarySelectionPreservesOriginalOnTies) {
 
 TEST_F(RegionSummaryTest, UnknownEstimatesDoNotDisplaceKnownPlans) {
   auto module = scalingDot();
-  auto state = enumerateBoundaryStates(regions(*module)[0], selectMesh(*module))
-                   .states[0];
+  auto state =
+      enumerateInputStates(regions(*module)[0], selectMesh(*module)).states[0];
+  BoundaryState boundary{state, {}};
   RegionSummary summary;
-  summary.record(0, state, {true, {0, 0, 1}, {}, "unknown"});
-  summary.record(1, state, {true, {5, 0, 0}, {}, "known"});
-  summary.record(2, state, {true, {0, 0, 1}, {}, "unknown"});
+  summary.record(0, boundary, {true, {0, 0, 1}, {}, "unknown"});
+  summary.record(1, boundary, {true, {5, 0, 0}, {}, "known"});
+  summary.record(2, boundary, {true, {0, 0, 1}, {}, "unknown"});
   ASSERT_EQ(summary.plans.size(), 1);
   EXPECT_EQ(summary.plans[0].lowered_mlir, "known");
   summary.finalizePlans();
@@ -58,7 +59,8 @@ TEST_F(RegionSummaryTest,
   RegionSummary summary;
   summary.interface.inputs = {{0, type}};
   summary.interface.outputs = {{1, type}};
-  summary.plans = {{0, a, {10, 0, 0}, ""}, {1, b, {6, 0, 0}, ""}};
+  summary.plans = {{0, a, {10, 0, 0}, "expensive"},
+                   {1, b, {6, 0, 0}, "survivor"}};
   std::vector<std::pair<TensorSharding, TensorSharding>> requests;
   summary.finalizePlans();
   pruneDominatedStates(summary, [&](auto from, auto to, auto tensor) {
@@ -74,9 +76,57 @@ TEST_F(RegionSummaryTest,
   EXPECT_EQ(summary.dominance[0].replacement_total, 8);
   auto witness_id = summary.dominance[0].replacement_id;
   EXPECT_EQ(summary.plans.at(witness_id).boundary, b);
+  EXPECT_TRUE(
+      summary.plans[summary.dominance[0].removed_id].lowered_mlir.empty());
+  EXPECT_EQ(summary.plans[witness_id].lowered_mlir, "survivor");
   ASSERT_EQ(requests.size(), 2);
   EXPECT_EQ(requests[0], std::make_pair(choices[0], choices[1]));
   EXPECT_EQ(requests[1], std::make_pair(choices[1], choices[0]));
+}
+
+TEST_F(RegionSummaryTest,
+       DifferentInferredOutputsRemainSeparateUntilDominance) {
+  auto module = scalingDot();
+  auto mesh = selectMesh(*module);
+  auto type =
+      mlir::RankedTensorType::get({8, 4}, mlir::Float32Type::get(&context));
+  auto choices = tensorLayoutChoices(type, mesh, {}, {});
+  RegionSummary summary;
+  summary.interface = {{{0, type}}, {{1, type}}};
+  summary.record(0, {{choices[0]}, {choices[0]}},
+                 {true, {8, 0, 0}, {}, "replicated"});
+  summary.record(1, {{choices[0]}, {choices[2]}},
+                 {true, {10, 0, 0}, {}, "sharded"});
+  summary.finalizePlans();
+  ASSERT_EQ(summary.plans.size(), 2);
+  pruneDominatedStates(summary, [](auto from, auto to, auto) {
+    return Cost{0, from == to ? 0.0 : 5.0, 0};
+  });
+  EXPECT_EQ(summary.frontier.size(), 2);
+  EXPECT_TRUE(summary.dominance.empty());
+}
+
+TEST_F(RegionSummaryTest, DominanceChargesEveryOutputAtALiveCut) {
+  auto module = scalingDot();
+  auto mesh = selectMesh(*module);
+  auto type =
+      mlir::RankedTensorType::get({8, 4}, mlir::Float32Type::get(&context));
+  auto layouts = tensorLayoutChoices(type, mesh, {}, {});
+  auto r = layouts[0], tp = layouts[2];
+  RegionInterface cut{{}, {{1, type}, {2, type}}};
+  std::vector<BoundaryState> boundaries{{{}, {r, r}}, {{}, {tp, tp}}};
+  std::vector<Cost> costs{{1, 0, 0}, {8, 0, 0}};
+  auto estimate = [](auto from, auto to, auto) {
+    return Cost{0, from == to ? 0.0 : 4.0, 0};
+  };
+  auto result = pruneBoundaryPlans(cut, boundaries, costs, estimate);
+  EXPECT_EQ(result.frontier.size(), 2);
+  EXPECT_TRUE(result.dominance.empty());
+  costs[1] = {10, 0, 0};
+  result = pruneBoundaryPlans(cut, boundaries, costs, estimate);
+  ASSERT_EQ(result.dominance.size(), 1);
+  EXPECT_EQ(result.dominance[0].adapters.total(), 8);
+  EXPECT_EQ(result.dominance[0].replacement_total, 9);
 }
 
 TEST_F(RegionSummaryTest, TiesAndUnknownAdaptersDoNotDeleteEveryState) {

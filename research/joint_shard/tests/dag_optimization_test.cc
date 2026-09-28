@@ -184,7 +184,7 @@ TEST_F(DagOptimizationTest,
   EXPECT_EQ(ids(graph.external.outputs), (std::vector<ValueId>{5, 3, 5, 0}));
 }
 
-TEST_F(DagOptimizationTest, RealGraphsMatchExhaustiveAndPreserveSource) {
+TEST_F(DagOptimizationTest, RealGraphsRespectReferenceBoundAndPreserveSource) {
   for (const auto& name : {"residual_block", "fanout_join",
                            "independent_branches", "dag_multi_output"}) {
     SCOPED_TRACE(name);
@@ -196,27 +196,18 @@ TEST_F(DagOptimizationTest, RealGraphsMatchExhaustiveAndPreserveSource) {
     ASSERT_TRUE(report.dag);
     const auto& dag = *report.dag;
     EXPECT_EQ(print(*module), before);
-    EXPECT_FALSE(dag.boundary_truncated);
-    EXPECT_FALSE(dag.exact.truncated);
+    EXPECT_FALSE(dag.input_truncated);
+    EXPECT_FALSE(dag.result.truncated);
     ReshardCostOracle oracle(report.mesh);
     ReshardPlanner planner = [&](auto from, auto to, auto type) {
       return oracle.plan(from, to, type);
     };
-    EXPECT_NEAR(
-        dag.exact.cost.total(),
-        exhaustive(report.regions, dag.interface, dag.contract, planner), 1e-9);
-    EXPECT_LE(dag.resolved.cost.total(), dag.exact.cost.total() + 1e-9);
-    EXPECT_LE(dag.exact.cost.total(), dag.original.cost.total() + 1e-9);
-    verifyCostAndOccurrences(dag.exact, report, CostModel{});
-    verifyCostAndOccurrences(dag.resolved, report, CostModel{});
-    auto original = parse(materializeExecutionPlan(dag.original.execution,
-                                                   report.original_regions,
-                                                   report.mesh, CostModel{}));
-    EXPECT_NEAR(CostModel().estimate(*original, report.mesh.mesh).total(),
-                dag.original.cost.total(), 1e-9);
+    EXPECT_LE(dag.result.cost.total(),
+              exhaustive(report.regions, dag.interface, dag.contract, planner) +
+                  1e-9);
+    verifyCostAndOccurrences(dag.result, report, CostModel{});
     EXPECT_NE(formatReport(dag).find("Live after region"), std::string::npos);
-    EXPECT_NE(formatComparison(dag).find("Peak live values: 2"),
-              std::string::npos);
+    EXPECT_NE(formatReport(dag).find("Peak live values: 2"), std::string::npos);
   }
 }
 
@@ -229,18 +220,14 @@ TEST_F(DagOptimizationTest, DAGAndChainAgreeForThreeToFiveRegions) {
     options.optimize_chain = false;
     options.optimize_dag = true;
     auto dag = summarizeRegions(*module, options);
-    EXPECT_NEAR(dag.dag->exact.cost.total(), chain.chain->exact.cost.total(),
+    EXPECT_NEAR(dag.dag->result.cost.total(), chain.chain->result.cost.total(),
                 1e-9);
-    EXPECT_NEAR(dag.dag->resolved.cost.total(),
-                chain.chain->resolved.cost.total(), 1e-9);
-    EXPECT_NEAR(dag.dag->original.cost.total(),
-                chain.chain->original.cost.total(), 1e-9);
-    EXPECT_EQ(dag.dag->exact.states_per_layer,
-              chain.chain->exact.states_per_layer);
+    EXPECT_EQ(dag.dag->result.states_per_layer,
+              chain.chain->result.states_per_layer);
   }
 }
 
-TEST_F(DagOptimizationTest, SyntheticResidualBeatsGreedyAndBoundsAreExplicit) {
+TEST_F(DagOptimizationTest, SyntheticResidualSearchAndBoundsAreExplicit) {
   auto module = fixture("residual_block");
   auto mesh = selectMesh(*module);
   auto type =
@@ -271,11 +258,8 @@ TEST_F(DagOptimizationTest, SyntheticResidualBeatsGreedyAndBoundsAreExplicit) {
   };
   BoundaryState contract{{r}, {r}};
   auto exact = optimizeDag(regions, graph, contract, oracle);
-  auto greedy =
-      optimizeDag(regions, graph, contract, oracle, {DagSearchMode::Greedy});
-  ASSERT_TRUE(exact.feasible && greedy.feasible);
+  ASSERT_TRUE(exact.feasible);
   EXPECT_EQ(exact.cost.total(), 5);
-  EXPECT_EQ(greedy.cost.total(), 6);
   EXPECT_EQ(exact.cost.total(), exhaustive(regions, graph, contract, oracle));
   DagSearchOptions cap;
   cap.max_states = 1;
@@ -322,14 +306,19 @@ TEST_F(DagOptimizationTest, ConsumerConversionPreservesProducerForLaterUse) {
   // consumer's all-gather must not overwrite the producer's persistent TP copy.
   std::vector<BoundaryState> boundaries{
       {{r}, {tp}}, {{r, r}, {r}}, {{tp}, {r}}, {{r, r}, {r}}};
+  auto sourceRegions =
+      Regionizer().split(module->lookupSymbol<mlir::func::FuncOp>("main"));
   for (size_t i = 0; i < report.regions.size(); ++i) {
     auto& region = report.regions[i];
-    auto found = std::find_if(
-        region.plans.begin(), region.plans.end(),
-        [&](const auto& plan) { return plan.boundary == boundaries[i]; });
-    ASSERT_NE(found, region.plans.end());
-    auto selected = *found;
-    region.plans = {std::move(selected)};
+    auto prepared = prepareCandidateModule(sourceRegions[i],
+                                           region.candidates[0], report.mesh);
+    prepared->lookupSymbol<mlir::func::FuncOp>("main").setResultAttr(
+        0, "sdy.sharding", boundaries[i].outputs[0].attr);
+    auto evaluated =
+        RegionEvaluator(report.mesh).evaluate(*prepared, boundaries[i].inputs);
+    ASSERT_TRUE(evaluated.feasible) << evaluated.failure;
+    region.plans = {
+        {0, evaluated.boundary, evaluated.cost, evaluated.lowered_mlir}};
     region.finalizePlans();
   }
   ReshardCostOracle oracle(report.mesh);
@@ -362,13 +351,12 @@ TEST_F(DagOptimizationTest, NumericalSourceRewritesAndEmittedDAGAgree) {
   std::mt19937 random(42);
   for (const auto& name : {"residual_block", "fanout_join",
                            "independent_branches", "dag_multi_output"}) {
-    for (bool resolved : {false, true}) {
-      SCOPED_TRACE(std::string(name) + " resolved=" + std::to_string(resolved));
+    {
+      SCOPED_TRACE(name);
       auto module = fixture(name);
       RegionOptimizerOptions options;
       options.optimize_dag = true;
-      options.dag.mode =
-          resolved ? DagSearchMode::Resolved : DagSearchMode::Exact;
+
       options.cost.compute_work_per_us = 1;
       options.cost.collective_latency_us = 0.01;
       auto report = summarizeRegions(*module, options);
@@ -441,9 +429,6 @@ TEST_F(DagOptimizationTest, RejectsIncompleteCoverageAndInvalidConfiguration) {
   options.dag.max_live_values = 1;
   EXPECT_THROW(summarizeRegions(*module, options), std::invalid_argument);
   options.dag.max_live_values = 4;
-  options.dag.mode = DagSearchMode::Greedy;
-  EXPECT_THROW(summarizeRegions(*module, options), std::invalid_argument);
-  options.dag.mode = DagSearchMode::Exact;
   options.optimize_chain = true;
   EXPECT_THROW(summarizeRegions(*module, options), std::invalid_argument);
   auto blocked = parse(R"mlir(module {sdy.mesh @mesh = <["data"=2, "model"=2]>
@@ -479,9 +464,9 @@ TEST_F(DagOptimizationTest, FixedAnnotationsSharedArgumentsAndEarlyReturns) {
   const auto& dag = *report.dag;
   EXPECT_TRUE(dag.contract.inputs[1].attr.isFullyClosed());
   EXPECT_EQ(dag.contract.inputs[1], dag.contract.outputs[1]);
-  EXPECT_EQ(dag.exact.steps[0].selected.boundary.outputs[0],
+  EXPECT_EQ(dag.result.steps[0].selected.boundary.outputs[0],
             dag.contract.outputs[1]);
-  EXPECT_EQ(dag.exact.peak_live_values, 3);
+  EXPECT_EQ(dag.result.peak_live_values, 3);
   auto emitted = parse(dag.selected().lowered_mlir);
   auto main = emitted->lookupSymbol<mlir::func::FuncOp>("main");
   ASSERT_EQ(main.getNumArguments(), 3);
@@ -506,7 +491,7 @@ TEST_F(DagOptimizationTest, StrictPolicyAndWriterEmitSelectedDAG) {
   auto module = fixture("residual_block");
   RegionOptimizerOptions options;
   options.optimize_dag = true;
-  options.dag.mode = DagSearchMode::Resolved;
+
   options.rewriting.numerical_policy = NumericalPolicy::PreserveEvaluation;
   llvm::SmallString<128> directory;
   ASSERT_FALSE(
