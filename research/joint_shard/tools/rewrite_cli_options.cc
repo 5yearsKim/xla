@@ -71,7 +71,7 @@ bool applyRewriteCliOption(const std::string& name, const std::string& value,
     options.print_egraph = parseBoolean(value);
     return true;
   }
-  bool NumericalPermissions::* permission = nullptr;
+  bool NumericalPermissions::*permission = nullptr;
   if (name == "allow-fp-reorder")
     permission = &NumericalPermissions::reorder_floating_point;
   else if (name == "allow-fp-reassociate")
